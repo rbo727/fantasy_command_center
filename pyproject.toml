@@ -2,7 +2,7 @@
 name = "ffm"
 version = "0.1.0"
 description = "Fantasy Command Center - cross-platform fantasy football league manager and pick'em automation"
-readme = "README.rst"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     # core
@@ -75,3 +75,11 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer's whole API is Option()/Argument() in argument defaults; B008 is a
+# false positive here, not a smell worth working around.
+"ffm/cli.py" = ["B008"]
+# The captured curl command is verbatim browser output; wrapping it would stop
+# it being a faithful fixture.
+"tests/test_curl_import.py" = ["E501"]

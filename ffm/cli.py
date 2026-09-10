@@ -1,0 +1,404 @@
+"""Command line interface.
+
+`ffm doctor` is the important one: run it after every deploy and before trusting
+any unattended job. It answers "will the 3am run actually work" while you're
+awake to do something about the answer.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from ffm.core.config import get_settings
+from ffm.core.secrets import Keys, SecretsError, SecretStore
+
+app = typer.Typer(add_completion=False, help="Fantasy Command Center")
+secrets_app = typer.Typer(help="Manage encrypted credentials")
+pickem_app = typer.Typer(help="ESPN pick'em automation")
+app.add_typer(secrets_app, name="secrets")
+app.add_typer(pickem_app, name="pickem")
+
+console = Console()
+
+
+@app.callback()
+def _configure(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else get_settings().log_level,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    )
+
+
+# --------------------------------------------------------------------------
+# doctor
+# --------------------------------------------------------------------------
+@app.command()
+def doctor() -> None:
+    """Check that this host can actually do the work."""
+    settings = get_settings()
+    table = Table(title="ffm doctor", show_lines=False)
+    table.add_column("Check")
+    table.add_column("Result")
+    table.add_column("Detail", overflow="fold")
+
+    failures = 0
+
+    def row(name: str, ok: bool | None, detail: str = "") -> None:
+        nonlocal failures
+        if ok is None:
+            table.add_row(name, "[yellow]skip[/yellow]", detail)
+        elif ok:
+            table.add_row(name, "[green]ok[/green]", detail)
+        else:
+            failures += 1
+            table.add_row(name, "[red]FAIL[/red]", detail)
+
+    row("data dir", settings.data_path.exists(), str(settings.data_path))
+    row("timezone", True, settings.timezone)
+    row(
+        "dry run",
+        True,
+        "[yellow]ON — no writes will leave this process[/yellow]"
+        if settings.dry_run
+        else "[red]OFF — writes are live[/red]",
+    )
+
+    # Database
+    try:
+        from ffm.core.db import init_db, session_scope
+        from ffm.core.models import Action
+
+        init_db()
+        with session_scope() as s:
+            count = s.query(Action).count()
+        row("database", True, f"{settings.db_url} ({count} actions recorded)")
+    except Exception as exc:  # noqa: BLE001
+        row("database", False, str(exc))
+
+    # Secrets
+    try:
+        store = SecretStore()
+        names = store.names()
+        row("secret store", True, f"{len(names)} secrets: {', '.join(names) or '(empty)'}")
+        for label, key in [
+            ("ESPN swid", Keys.ESPN_SWID),
+            ("ESPN s2", Keys.ESPN_S2),
+            ("FantasyGuru login", Keys.FANTASYGURU_USERNAME),
+            ("Sleeper token", Keys.SLEEPER_TOKEN),
+        ]:
+            row(label, store.has(key) or None, "set" if store.has(key) else "not configured")
+    except SecretsError as exc:
+        row("secret store", False, str(exc))
+
+    # Leagues
+    leagues = settings.leagues()
+    row(
+        "leagues config",
+        bool(leagues) or None,
+        f"{len(leagues)} configured" if leagues else f"none in {settings.leagues_file}",
+    )
+
+    # ESPN pick'em reachability
+    try:
+        store = SecretStore()
+        if store.has(Keys.ESPN_SWID) and store.has(Keys.ESPN_S2):
+            from ffm.platforms.espn_pickem import ESPNPickemClient
+
+            pickem_leagues = [lg for lg in leagues if lg.platform == "espn_pickem"]
+            if not pickem_leagues:
+                row("ESPN pick'em", None, "no espn_pickem league configured")
+            for lg in pickem_leagues:
+                with ESPNPickemClient(
+                    store.require(Keys.ESPN_SWID),
+                    store.require(Keys.ESPN_S2),
+                    lg.extra.get("challenge", lg.league_id),
+                ) as client:
+                    props = client.propositions()
+                    unresolved = [p.label for p in props if not p.fully_resolved]
+                    row(
+                        f"ESPN pick'em [{lg.key}]",
+                        not unresolved,
+                        f"{len(props)} propositions"
+                        + (f"; UNRESOLVED: {unresolved}" if unresolved else ""),
+                    )
+        else:
+            row("ESPN pick'em", None, "ESPN cookies not configured")
+    except Exception as exc:  # noqa: BLE001
+        row("ESPN pick'em", False, f"{type(exc).__name__}: {exc}")
+
+    # Write spec
+    spec_path = settings.data_path / "espn_pickem_write.json"
+    row(
+        "pick'em write path",
+        spec_path.exists() or None,
+        str(spec_path) if spec_path.exists() else "not captured — see `ffm pickem capture-write`",
+    )
+
+    console.print(table)
+    if failures:
+        console.print(f"[red]{failures} check(s) failed.[/red]")
+        raise typer.Exit(code=1)
+    console.print("[green]All checks passed.[/green]")
+
+
+# --------------------------------------------------------------------------
+# secrets
+# --------------------------------------------------------------------------
+@secrets_app.command("init")
+def secrets_init() -> None:
+    """Generate a master key. Store it in your password manager."""
+    key = SecretStore.generate_key()
+    console.print("Add this to your environment (or .env) on this host:\n")
+    console.print(f"[bold]FFM_MASTER_KEY={key}[/bold]\n")
+    console.print(
+        "[yellow]This key is never stored by ffm. Lose it and the secret store "
+        "must be rebuilt from scratch.[/yellow]"
+    )
+
+
+@secrets_app.command("set")
+def secrets_set(
+    name: str,
+    value: str = typer.Option(None, help="Omit to be prompted without echo."),
+) -> None:
+    """Store a credential."""
+    if value is None:
+        value = typer.prompt(f"Value for {name}", hide_input=True)
+    SecretStore().set(name, value)
+    console.print(f"[green]Stored {name}.[/green]")
+
+
+@secrets_app.command("list")
+def secrets_list() -> None:
+    """List stored secret names (never values)."""
+    for name in SecretStore().names():
+        console.print(f"  {name}")
+
+
+@secrets_app.command("rm")
+def secrets_rm(name: str) -> None:
+    SecretStore().delete(name)
+    console.print(f"[green]Removed {name}.[/green]")
+
+
+# --------------------------------------------------------------------------
+# pick'em
+# --------------------------------------------------------------------------
+def _pickem_client(league_key: str):
+    from ffm.platforms.espn_pickem import ESPNPickemClient, WriteSpec
+
+    settings = get_settings()
+    league = settings.league(league_key)
+    store = SecretStore()
+    spec = WriteSpec.load(settings.data_path / "espn_pickem_write.json")
+    return ESPNPickemClient(
+        store.require(Keys.ESPN_SWID),
+        store.require(Keys.ESPN_S2),
+        league.extra.get("challenge", league.league_id),
+        write_spec=spec,
+    ), league
+
+
+@pickem_app.command("dump")
+def pickem_dump(
+    league: str = typer.Argument(..., help="League key from config/leagues.yml"),
+    week: int = typer.Option(None),
+    out: Path = typer.Option(None, help="Where to write the raw JSON"),
+) -> None:
+    """Save raw ESPN responses as fixtures.
+
+    Run this once against your real account so the parsers can be validated
+    against ESPN's actual field names rather than assumed ones.
+    """
+    client, lg = _pickem_client(league)
+    with client:
+        payload = {
+            "challenge": client.challenge,
+            "week": week,
+            "challenge_info": client.challenge_info(week=week),
+            "entry": client.entry(),
+        }
+    target = out or (get_settings().data_path / f"pickem_dump_{lg.key}_w{week or 'cur'}.json")
+    target.write_text(json.dumps(payload, indent=2))
+    console.print(f"[green]Wrote {target}[/green]")
+    console.print(
+        "[yellow]This file contains your entry data. Review before sharing.[/yellow]"
+    )
+
+
+@pickem_app.command("capture-write")
+def pickem_capture_write(
+    curl_file: Path = typer.Option(..., help="File containing a 'Copy as cURL' command"),
+) -> None:
+    """Teach ffm how to submit picks, from a request you captured."""
+    from ffm.platforms.curl_import import CurlParseError, build_write_spec
+    from ffm.platforms.espn_pickem import WriteSpec
+
+    try:
+        spec_kwargs, report = build_write_spec(curl_file.read_text())
+    except CurlParseError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    path = get_settings().data_path / "espn_pickem_write.json"
+    WriteSpec(**spec_kwargs).save(path)
+
+    table = Table(title="Captured write request")
+    table.add_column("Field")
+    table.add_column("Value", overflow="fold")
+    for k, v in report.items():
+        table.add_row(k, str(v))
+    console.print(table)
+    if report["dropped_headers"]:
+        console.print(
+            f"[yellow]Dropped credential headers ({', '.join(report['dropped_headers'])}) — "
+            "ffm sends your stored ESPN cookies instead.[/yellow]"
+        )
+    console.print(f"[green]Saved to {path}[/green]")
+
+
+@pickem_app.command("run")
+def pickem_run(
+    league: str = typer.Argument(..., help="League key from config/leagues.yml"),
+    week: int = typer.Option(None, help="Defaults to the current scoring period"),
+    picks_file: Path = typer.Option(
+        None,
+        help="JSON list of staff picks. Until the FantasyGuru source lands, this is "
+        "how picks get in: [{matchup, team, market, spread, conviction}]",
+    ),
+    confidence: bool = typer.Option(False, help="Assign confidence points 1..N"),
+    submit: bool = typer.Option(False, help="Actually submit (otherwise preview only)"),
+) -> None:
+    """Match staff picks to this week's slate and submit them."""
+    from ffm.core.actions import ActionGate, Proposal, Verification
+    from ffm.core.db import init_db, session_scope
+    from ffm.core.models import ActionKind
+    from ffm.engines.pickem import StaffPick, join
+
+    settings = get_settings()
+    init_db()
+    client, lg = _pickem_client(league)
+
+    if not picks_file:
+        console.print("[red]--picks-file is required until the FantasyGuru source lands.[/red]")
+        raise typer.Exit(code=1)
+    staff = [StaffPick(**item) for item in json.loads(picks_file.read_text())]
+
+    with client:
+        props = client.propositions(week=week)
+        result = join(staff, props, use_confidence_points=confidence)
+
+        table = Table(title=f"{lg.key} week {week or 'current'} — {result.summary()}")
+        table.add_column("Game")
+        table.add_column("Pick")
+        table.add_column("P(win)")
+        table.add_column("Conf")
+        for p in result.picks:
+            table.add_row(
+                next((q.label for q in props if q.id == p.proposition_id), p.proposition_id),
+                p.team_code,
+                f"{result.confidence_by_prop.get(p.proposition_id, 0):.3f}",
+                str(p.confidence or "-"),
+            )
+        console.print(table)
+
+        if result.review:
+            console.print("\n[yellow]Needs review — these were NOT submitted:[/yellow]")
+            for item in result.review:
+                console.print(f"  [{item.reason}] {item.detail}")
+
+        if not submit:
+            console.print("\n[cyan]Preview only. Re-run with --submit to send.[/cyan]")
+            return
+        if not result.picks:
+            console.print("[yellow]Nothing to submit.[/yellow]")
+            return
+
+        gate = ActionGate()
+        payload = {
+            "picks": [
+                {
+                    "proposition": p.proposition_id,
+                    "option": p.option_id,
+                    "team": p.team_code,
+                    "confidence": p.confidence,
+                }
+                for p in result.picks
+            ]
+        }
+        # Sorted so the same intent always yields the same key, whatever order
+        # the engine happened to emit picks in.
+        ordered = sorted(result.picks, key=lambda x: x.proposition_id)
+        key = f"pickem:{lg.key}:{week or 'cur'}:" + ",".join(
+            f"{p.proposition_id}={p.option_id}" for p in ordered
+        )
+
+        def _submit(_action) -> dict:
+            return client.submit_picks(result.picks)
+
+        def _verify(_action) -> Verification:
+            recorded = client.existing_picks()
+            if not recorded:
+                # ESPN withholds selections until kickoff for some challenges,
+                # so an empty read-back is inconclusive, not proof of failure.
+                return Verification(
+                    ok=False,
+                    message=(
+                        "ESPN returned no readable picks; selections may be "
+                        "hidden until kickoff"
+                    ),
+                    detail={"read_back": {}},
+                )
+            mismatches = {
+                p.proposition_id: recorded.get(p.proposition_id)
+                for p in result.picks
+                if recorded.get(p.proposition_id) != p.option_id
+            }
+            return Verification(
+                ok=not mismatches,
+                message=f"{len(mismatches)} pick(s) did not match" if mismatches else "",
+                detail={"mismatches": mismatches, "read_back_count": len(recorded)},
+            )
+
+        with session_scope() as session:
+            action = gate.propose_and_execute(
+                session,
+                Proposal(
+                    kind=ActionKind.PICKEM_SUBMIT,
+                    idempotency_key=key,
+                    payload=payload,
+                    rationale=(
+                        f"{len(result.picks)} staff-derived picks; "
+                        f"{len(result.review)} to review"
+                    ),
+                    league_key=lg.key,
+                    season=lg.season,
+                    week=week,
+                ),
+                submit=_submit,
+                verify=_verify,
+            )
+            console.print(f"\nAction {action.id}: [bold]{action.status.value}[/bold]")
+            if action.error:
+                console.print(f"[red]{action.error}[/red]")
+            if settings.dry_run:
+                console.print("[yellow]FFM_DRY_RUN is on — nothing was sent.[/yellow]")
+
+
+@app.command("db-init")
+def db_init() -> None:
+    """Create database tables."""
+    from ffm.core.db import init_db
+
+    init_db()
+    console.print(f"[green]Initialised {get_settings().db_url}[/green]")
+
+
+if __name__ == "__main__":
+    app()

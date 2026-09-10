@@ -1,0 +1,42 @@
+# Copy to config/leagues.yml and fill in. This file is safe to commit
+# (no credentials) — those live in the encrypted secret store.
+
+leagues:
+  # --- ESPN pick'em (Stage 1 priority) --------------------------------
+  # `challenge` is the slug in the URL when you make picks:
+  #   fantasy.espn.com/games/nfl-pickem-2026/make-picks  ->  nfl-pickem-2026
+  # Known kinds ffm can build for you: nfl_pickem, nfl_pigskin, college_pickem
+  - key: espn_pickem
+    platform: espn_pickem
+    league_id: nfl-pickem-2026
+    name: "ESPN NFL Pick'em"
+    season: 2026
+    extra:
+      challenge: nfl-pickem-2026
+      # Set true if your pool assigns 1..N confidence points per week.
+      confidence_points: false
+
+  # --- Sleeper redraft ------------------------------------------------
+  - key: sleeper_main
+    platform: sleeper
+    league_id: "000000000000000000"
+    name: "Main Sleeper League"
+    season: 2026
+    team_id: "your-sleeper-user-id"
+    # Waivers clear 3am Wednesday Eastern; the sniper arms just before this.
+    waiver_clear_cron: "0 3 * * 3"
+
+  # --- Yahoo ------------------------------------------------------------
+  - key: yahoo_main
+    platform: yahoo
+    league_id: "449.l.000000"
+    name: "Yahoo League"
+    season: 2026
+
+  # --- ESPN fantasy -----------------------------------------------------
+  - key: espn_main
+    platform: espn
+    league_id: "000000"
+    name: "ESPN League"
+    season: 2026
+    team_id: "1"
