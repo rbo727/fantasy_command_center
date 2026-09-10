@@ -1,0 +1,77 @@
+[project]
+name = "ffm"
+version = "0.1.0"
+description = "Fantasy Command Center - cross-platform fantasy football league manager and pick'em automation"
+readme = "README.rst"
+requires-python = ">=3.11"
+dependencies = [
+    # core
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "apscheduler>=3.10,<4",
+    "httpx>=0.27",
+    "cryptography>=42",
+    "typer>=0.12",
+    "rich>=13",
+    "pyyaml>=6",
+    "tenacity>=8.2",
+    "python-dateutil>=2.9",
+    # api
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    # browser-driven sources (FantasyGuru login, ESPN pick'em fallback)
+    "playwright>=1.44",
+    # LLM structuring of FantasyGuru prose
+    "anthropic>=0.34",
+    # vendored yahoo_fantasy_api library deps
+    "objectpath",
+    "pytz",
+    "yahoo_oauth",
+    "docopt",
+]
+
+[project.optional-dependencies]
+nfl = ["nflreadpy>=0.1"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "mock",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+ffm = "ffm.cli:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# NOTE: setup.py is left in place untouched. It packages the vendored
+# yahoo_fantasy_api library and belongs to upstream spilchen/yahoo_fantasy_api.
+# Leaving it alone keeps future `git merge upstream/master` conflict-free.
+[tool.setuptools]
+packages = [
+    "ffm",
+    "ffm.core",
+    "ffm.platforms",
+    "ffm.sources",
+    "ffm.engines",
+    "ffm.api",
+    "yahoo_fantasy_api",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# The vendored upstream library is not ours to lint.
+extend-exclude = ["yahoo_fantasy_api", "docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

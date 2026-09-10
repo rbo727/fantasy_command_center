@@ -14,3 +14,26 @@ docs/_build
 build/
 .python-version
 oauth.json
+
+# ---- ffm app ----
+# Secrets and session material. NOTHING here may ever reach the repo.
+secrets.enc
+secrets.enc.*
+*.session
+*.session.json
+.env
+.env.*
+!.env.example
+cookies/
+browser-profile/
+
+# Runtime state (DB, caches, captured HTML, logs)
+data/
+var/
+*.db
+*.sqlite3
+.cache/
+
+# Frontend
+web/node_modules/
+web/dist/
