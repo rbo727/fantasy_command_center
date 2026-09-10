@@ -1,3 +1,4 @@
+# Fantasy Command Center — league and pool declarations.
 # Copy to config/leagues.yml and fill in. This file is safe to commit
 # (no credentials) — those live in the encrypted secret store.
 

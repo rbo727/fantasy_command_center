@@ -1,4 +1,4 @@
-# Setup
+# Fantasy Command Center — setup
 
 Local development on your home PC. Deployment to the seedbox is Stage 6 and is
 covered in `docs/DEPLOY.md` once we get there.
@@ -6,9 +6,18 @@ covered in `docs/DEPLOY.md` once we get there.
 ## 1. Install
 
 ```bash
+git clone https://github.com/rbo727/fantasy_command_center
+cd fantasy_command_center
+
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+This installs the `ffm` command. (The repository was renamed from
+`yahoo_fantasy_api`; if you cloned it under the old name, GitHub's redirect
+keeps everything working — run
+`git remote set-url origin https://github.com/rbo727/fantasy_command_center`
+to point at the new URL.)
 
 ## 2. Master key and secrets
 

@@ -32,6 +32,10 @@ dependencies = [
     "docopt",
 ]
 
+[project.urls]
+Homepage = "https://github.com/rbo727/fantasy_command_center"
+Repository = "https://github.com/rbo727/fantasy_command_center"
+
 [project.optional-dependencies]
 nfl = ["nflreadpy>=0.1"]
 dev = [

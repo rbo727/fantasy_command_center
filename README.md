@@ -4,10 +4,36 @@ One self-hosted service across Yahoo, Sleeper, ESPN fantasy, ESPN pick'em and a
 survivor pool: pulls recommendations, submits the low-risk decisions
 unattended, and proposes the ones that cost money.
 
-> This repository began as a fork of
-> [spilchen/yahoo_fantasy_api](https://github.com/spilchen/yahoo_fantasy_api).
+```bash
+git clone https://github.com/rbo727/fantasy_command_center
+```
+
+> **Previously named `yahoo_fantasy_api`.** This repository began as a fork of
+> [spilchen/yahoo_fantasy_api](https://github.com/spilchen/yahoo_fantasy_api)
+> and was renamed once it became its own project. GitHub redirects the old URL
+> permanently, so existing clones and remotes keep working — though
+> `git remote set-url origin https://github.com/rbo727/fantasy_command_center`
+> is worth running to avoid confusion.
+>
 > That library still lives in `yahoo_fantasy_api/` and tracks upstream
 > unmodified — it's a dependency, not the project. The application is `ffm/`.
+
+## Repository layout
+
+Two projects share this repository: the application, and the vendored Yahoo
+library it depends on. Knowing which is which saves a lot of confusion.
+
+| Path | What it is |
+|---|---|
+| `ffm/` | **The application.** Everything Fantasy Command Center does. |
+| `tests/` | Application tests. |
+| `docs/SETUP.md` | **How to run it — start here.** |
+| `config/` | Your league declarations (`leagues.example.yml`). |
+| `yahoo_fantasy_api/` | Vendored upstream library. Tracks spilchen unmodified — do not rename this directory, `import yahoo_fantasy_api` depends on it. |
+| `README.rst`, `docs/*.rst`, `docs/conf.py`, `setup.py`, `.readthedocs.yaml`, `requirements.txt` | The **vendored library's** own docs and packaging, describing the Yahoo API bindings rather than this project. Left untouched so `git merge upstream/master` stays conflict-free. |
+
+The application is packaged by `pyproject.toml`; `setup.py` belongs to the
+vendored library and is not this project's build config.
 
 ## Status
 
