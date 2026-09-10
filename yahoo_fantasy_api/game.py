@@ -1,6 +1,6 @@
 #!/bin/python
 
-from fantasytools.yahoo_fantasy_api import yhandler, league
+from yahoo_fantasy_api import yhandler, league
 import objectpath
 
 
