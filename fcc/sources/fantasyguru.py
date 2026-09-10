@@ -28,10 +28,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from ffm.core.config import get_settings
-from ffm.core.secrets import Keys, SecretStore
-from ffm.engines.pickem import StaffPick
-from ffm.sources.html_text import html_to_text
+from fcc.core.config import get_settings
+from fcc.core.secrets import Keys, SecretStore
+from fcc.engines.pickem import StaffPick
+from fcc.sources.html_text import html_to_text
 
 log = logging.getLogger(__name__)
 

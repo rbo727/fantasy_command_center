@@ -15,7 +15,7 @@ build/
 .python-version
 oauth.json
 
-# ---- ffm app ----
+# ---- fcc app ----
 # Secrets and session material. NOTHING here may ever reach the repo.
 secrets.enc
 secrets.enc.*
@@ -37,3 +37,6 @@ var/
 # Frontend
 web/node_modules/
 web/dist/
+
+# Tooling caches
+.ruff_cache/

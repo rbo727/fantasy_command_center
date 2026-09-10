@@ -13,20 +13,35 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-This installs the `ffm` command. (The repository was renamed from
+This installs the `fcc` command. (The repository was renamed from
 `yahoo_fantasy_api`; if you cloned it under the old name, GitHub's redirect
 keeps everything working — run
 `git remote set-url origin https://github.com/rbo727/fantasy_command_center`
 to point at the new URL.)
 
+### Coming from the `ffm` naming
+
+The package, command and environment prefix were `ffm` / `FFM_` early on. If you
+already set things up under those names:
+
+```bash
+sed -i 's/^FFM_/FCC_/' .env      # FFM_MASTER_KEY -> FCC_MASTER_KEY, etc.
+mv data/ffm.db data/fcc.db       # only if you have one
+pip uninstall ffm                # then reinstall as above
+```
+
+The encrypted secret store (`data/secrets.enc`) is unaffected — same file, same
+master key value, only the variable holding it is renamed. `fcc doctor` will
+tell you if anything is still missing.
+
 ## 2. Master key and secrets
 
 ```bash
-ffm secrets init            # prints FFM_MASTER_KEY — put it in .env
+fcc secrets init            # prints FCC_MASTER_KEY — put it in .env
 cp .env.example .env        # then paste the key in
 ```
 
-The key is never stored by ffm. Keep a copy in your password manager: lose it
+The key is never stored by fcc. Keep a copy in your password manager: lose it
 and the secret store has to be rebuilt.
 
 ## 3. ESPN cookies
@@ -35,12 +50,12 @@ In a browser logged into ESPN, DevTools → Application → Cookies →
 `https://fantasy.espn.com`. Copy `SWID` (keep the braces) and `espn_s2`.
 
 ```bash
-ffm secrets set espn_swid   # prompts without echoing
-ffm secrets set espn_s2
+fcc secrets set espn_swid   # prompts without echoing
+fcc secrets set espn_s2
 ```
 
 These expire every few months. When pick'em jobs start failing with HTTP 401,
-this is why — re-copy them and `ffm doctor` will go green again.
+this is why — re-copy them and `fcc doctor` will go green again.
 
 ## 4. Leagues
 
@@ -54,16 +69,16 @@ The pick'em `challenge` slug is in the URL when you make picks:
 ## 5. Check the host
 
 ```bash
-ffm doctor
+fcc doctor
 ```
 
 Run this after every change and before trusting any unattended job. It is the
 fastest way to find out that a cookie expired while you weren't looking.
 
-## 6. Teach ffm how to submit picks (one-time, ~2 minutes)
+## 6. Teach fcc how to submit picks (one-time, ~2 minutes)
 
 ESPN does not publish its pick-submission endpoint, so rather than guessing a
-payload, ffm replays a request you captured.
+payload, fcc replays a request you captured.
 
 1. Open your pick'em entry.
 2. DevTools → Network tab, filter for `gambit`.
@@ -72,38 +87,38 @@ payload, ffm replays a request you captured.
 5. Paste it into a file, then:
 
 ```bash
-ffm pickem capture-write --curl-file /tmp/capture.txt
+fcc pickem capture-write --curl-file /tmp/capture.txt
 ```
 
-ffm prints exactly what it detected — the URL, the field names, and which
+fcc prints exactly what it detected — the URL, the field names, and which
 credential headers it dropped. Cookies and `Authorization` headers are
-deliberately **not** saved; ffm sends your stored ESPN cookies instead.
+deliberately **not** saved; fcc sends your stored ESPN cookies instead.
 
 Also worth doing once, so the parsers can be checked against ESPN's real field
 names rather than assumed ones:
 
 ```bash
-ffm pickem dump espn_pickem --week 1
+fcc pickem dump espn_pickem --week 1
 ```
 
 ## 7. Run pick'em
 
 ```bash
 # Preview — matches picks to the slate, submits nothing
-ffm pickem run espn_pickem --week 1 --picks-file picks.json
+fcc pickem run espn_pickem --week 1 --picks-file picks.json
 
-# Submit (still blocked unless FFM_DRY_RUN=false)
-ffm pickem run espn_pickem --week 1 --picks-file picks.json --submit
+# Submit (still blocked unless FCC_DRY_RUN=false)
+fcc pickem run espn_pickem --week 1 --picks-file picks.json --submit
 ```
 
-With no `--picks-file`, ffm logs into FantasyGuru, fetches the staff-picks page
+With no `--picks-file`, fcc logs into FantasyGuru, fetches the staff-picks page
 from `extra.fantasyguru_url` (or `--fg-url`), and structures it with one Claude
 call. Store the credentials first:
 
 ```bash
-ffm secrets set fantasyguru_username
-ffm secrets set fantasyguru_password
-ffm secrets set anthropic_api_key
+fcc secrets set fantasyguru_username
+fcc secrets set fantasyguru_password
+fcc secrets set anthropic_api_key
 ```
 
 The fetched page is cached for 30 minutes and the raw HTML is kept under
@@ -122,15 +137,15 @@ rest of the chain:
 ```
 
 `market` is one of `ATS`, `ML`, `SU`, `OU`. **This field matters.** An ATS lean
-on a +7 underdog is not a pick for them to win — ffm translates it to the
-straight-up favourite and tells you it did. See `ffm/engines/pickem.py`.
+on a +7 underdog is not a pick for them to win — fcc translates it to the
+straight-up favourite and tells you it did. See `fcc/engines/pickem.py`.
 
-Anything ffm can't resolve confidently is listed under "Needs review" and is
+Anything fcc can't resolve confidently is listed under "Needs review" and is
 never submitted.
 
 ## Safety model
 
-- `FFM_DRY_RUN=true` (the default) means no write leaves the process. The exact
+- `FCC_DRY_RUN=true` (the default) means no write leaves the process. The exact
   payload is recorded so you can inspect it.
 - Pick'em submits and benching an inactive player run unattended.
 - FAAB bids, survivor picks, drops and trades always need your approval.

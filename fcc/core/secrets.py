@@ -2,7 +2,7 @@
 
 Every credential this app holds — Yahoo OAuth tokens, ESPN cookies, the Sleeper
 bearer token, FantasyGuru login — lives in a single Fernet-encrypted blob on
-disk. The key never lives beside it: it comes from ``FFM_MASTER_KEY`` in the
+disk. The key never lives beside it: it comes from ``FCC_MASTER_KEY`` in the
 environment, provisioned separately on each host.
 
 Two rules this module exists to enforce:
@@ -20,7 +20,7 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from ffm.core.config import get_settings
+from fcc.core.config import get_settings
 
 
 class SecretsError(RuntimeError):
@@ -33,7 +33,7 @@ class SecretStore:
     def __init__(self, path: Path | None = None, master_key: str | None = None) -> None:
         settings = get_settings()
         self.path = path or (settings.data_path / "secrets.enc")
-        self._key = master_key or settings.master_key or os.environ.get("FFM_MASTER_KEY")
+        self._key = master_key or settings.master_key or os.environ.get("FCC_MASTER_KEY")
 
     # -- key handling -----------------------------------------------------
     @staticmethod
@@ -44,13 +44,13 @@ class SecretStore:
     def _fernet(self) -> Fernet:
         if not self._key:
             raise SecretsError(
-                "FFM_MASTER_KEY is not set. Generate one with `ffm secrets init` "
+                "FCC_MASTER_KEY is not set. Generate one with `fcc secrets init` "
                 "and export it in the environment (or .env) before continuing."
             )
         try:
             return Fernet(self._key.encode() if isinstance(self._key, str) else self._key)
         except (ValueError, TypeError) as exc:
-            raise SecretsError("FFM_MASTER_KEY is not a valid Fernet key.") from exc
+            raise SecretsError("FCC_MASTER_KEY is not a valid Fernet key.") from exc
 
     # -- storage ----------------------------------------------------------
     def _load(self) -> dict[str, str]:
@@ -60,7 +60,7 @@ class SecretStore:
             return json.loads(self._fernet().decrypt(self.path.read_bytes()).decode())
         except InvalidToken as exc:
             raise SecretsError(
-                f"Could not decrypt {self.path.name} — wrong FFM_MASTER_KEY for this file."
+                f"Could not decrypt {self.path.name} — wrong FCC_MASTER_KEY for this file."
             ) from exc
 
     def _save(self, data: dict[str, str]) -> None:
@@ -75,8 +75,8 @@ class SecretStore:
 
     # -- public API -------------------------------------------------------
     def get(self, name: str, default: str | None = None) -> str | None:
-        """Fetch a secret. Env var FFM_SECRET_<NAME> wins, for CI and one-offs."""
-        env = os.environ.get(f"FFM_SECRET_{name.upper()}")
+        """Fetch a secret. Env var FCC_SECRET_<NAME> wins, for CI and one-offs."""
+        env = os.environ.get(f"FCC_SECRET_{name.upper()}")
         if env:
             return env
         return self._load().get(name, default)
@@ -85,7 +85,7 @@ class SecretStore:
         value = self.get(name)
         if not value:
             raise SecretsError(
-                f"Required secret {name!r} is not set. Add it with `ffm secrets set {name}`."
+                f"Required secret {name!r} is not set. Add it with `fcc secrets set {name}`."
             )
         return value
 

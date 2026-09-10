@@ -21,7 +21,7 @@ SENSITIVE_HEADERS = {"cookie", "authorization", "x-api-key", "set-cookie"}
 #: Headers that describe a specific browser session and only cause confusion.
 NOISE_HEADERS = {"content-length", "host", "connection", "accept-encoding"}
 
-_PICKS_SENTINEL = "__FFM_PICKS__"
+_PICKS_SENTINEL = "__FCC_PICKS__"
 
 
 class CurlParseError(ValueError):
@@ -161,7 +161,7 @@ def build_write_spec(command: str) -> tuple[dict, dict]:
         doc = json.loads(parsed.body)
     except json.JSONDecodeError as exc:
         raise CurlParseError(
-            f"The request body isn't JSON ({exc}). ffm can only templatize JSON bodies."
+            f"The request body isn't JSON ({exc}). fcc can only templatize JSON bodies."
         ) from exc
 
     path = _find_pick_array(doc)

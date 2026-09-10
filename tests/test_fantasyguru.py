@@ -10,16 +10,16 @@ from dataclasses import dataclass
 
 import pytest
 
-from ffm.engines.pickem import join, straight_up_side
-from ffm.platforms.espn_pickem import Option, Proposition
-from ffm.sources.fantasyguru import (
+from fcc.engines.pickem import join, straight_up_side
+from fcc.platforms.espn_pickem import Option, Proposition
+from fcc.sources.fantasyguru import (
     EXTRACTION_SYSTEM,
     ExtractedPick,
     ExtractedPicks,
     FantasyGuruError,
     extract_staff_picks,
 )
-from ffm.sources.html_text import html_to_text
+from fcc.sources.html_text import html_to_text
 
 PAGE = """
 <html><head><style>.a{color:red}</style><script>track();</script></head>
@@ -179,7 +179,7 @@ def test_sign_convention_is_the_one_the_engine_expects():
     favourite = ExtractedPick(matchup="BAL@KC", team="Chiefs", market="ATS", spread=-6.5)
     underdog = ExtractedPick(matchup="BAL@KC", team="Ravens", market="ATS", spread=6.5)
 
-    from ffm.engines.pickem import StaffPick
+    from fcc.engines.pickem import StaffPick
 
     fav_code, _, _ = straight_up_side(StaffPick(**favourite.model_dump()))
     dog_code, _, why = straight_up_side(StaffPick(**underdog.model_dump()))

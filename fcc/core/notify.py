@@ -10,7 +10,7 @@ import logging
 
 import httpx
 
-from ffm.core.config import get_settings
+from fcc.core.config import get_settings
 
 log = logging.getLogger(__name__)
 

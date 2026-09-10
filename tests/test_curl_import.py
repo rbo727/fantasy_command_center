@@ -8,8 +8,8 @@ import json
 
 import pytest
 
-from ffm.platforms.curl_import import CurlParseError, build_write_spec, parse_curl
-from ffm.platforms.espn_pickem import Pick, WriteSpec
+from fcc.platforms.curl_import import CurlParseError, build_write_spec, parse_curl
+from fcc.platforms.espn_pickem import Pick, WriteSpec
 
 CHROME_CURL = r"""curl 'https://gambit-api.fantasy.espn.com/apis/v1/challenges/nfl-pickem-2026/entries/%7BABC%7D' \
   -X 'POST' \

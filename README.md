@@ -1,4 +1,4 @@
-# Fantasy Command Center (`ffm`)
+# Fantasy Command Center (`fcc`)
 
 One self-hosted service across Yahoo, Sleeper, ESPN fantasy, ESPN pick'em and a
 survivor pool: pulls recommendations, submits the low-risk decisions
@@ -16,7 +16,7 @@ git clone https://github.com/rbo727/fantasy_command_center
 > is worth running to avoid confusion.
 >
 > That library still lives in `yahoo_fantasy_api/` and tracks upstream
-> unmodified — it's a dependency, not the project. The application is `ffm/`.
+> unmodified — it's a dependency, not the project. The application is `fcc/`.
 
 ## Repository layout
 
@@ -25,7 +25,7 @@ library it depends on. Knowing which is which saves a lot of confusion.
 
 | Path | What it is |
 |---|---|
-| `ffm/` | **The application.** Everything Fantasy Command Center does. |
+| `fcc/` | **The application.** Everything Fantasy Command Center does. |
 | `tests/` | Application tests. |
 | `docs/SETUP.md` | **How to run it — start here.** |
 | `config/` | Your league declarations (`leagues.example.yml`). |
@@ -55,22 +55,22 @@ These are the things that keep an unattended system from quietly costing you a
 week:
 
 **Everything goes through the action gate.** No engine calls a platform's write
-API directly. `ffm/core/actions.py` owns the state machine, so every platform
+API directly. `fcc/core/actions.py` owns the state machine, so every platform
 behaves identically and every mutation is auditable in the `actions` table.
 
-**A write that isn't confirmed is not a success.** After submitting, ffm reads
+**A write that isn't confirmed is not a success.** After submitting, fcc reads
 the platform back. If the read-back disagrees — or can't be performed — the
 action is recorded `unverified` and you get notified. Silent wrongness is the
 real enemy; a crashed job is obvious, a job that submitted the *wrong* picks is
 not.
 
-**Resolve or refuse.** `ffm/core/teams.py` maps team labels across nflverse,
+**Resolve or refuse.** `fcc/core/teams.py` maps team labels across nflverse,
 ESPN (`WSH`, `JAC`), Yahoo and Sleeper spellings. It has no fuzzy matching:
 ambiguous input like "New York" returns `None` and routes to human review.
 
 **Markets aren't interchangeable.** FantasyGuru's staff picks are frequently
 against the spread; ESPN pick'em asks who wins outright. An ATS lean on a +7
-underdog is usually a straight-up *loss* pick, so `ffm/engines/pickem.py`
+underdog is usually a straight-up *loss* pick, so `fcc/engines/pickem.py`
 converts spread → win probability and picks accordingly, rather than mirroring
 the staff card.
 
@@ -79,14 +79,14 @@ unattended. FAAB bids, survivor picks, drops and trades always require
 approval, and there is deliberately no setting that changes that.
 
 **Dry run is the default.** A fresh checkout or a freshly provisioned seedbox
-cannot touch a live league until you explicitly set `FFM_DRY_RUN=false`.
+cannot touch a live league until you explicitly set `FCC_DRY_RUN=false`.
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
 pytest          # app tests
-ruff check ffm tests
+ruff check fcc tests
 pytest yahoo_fantasy_api/tests   # vendored library, tracks upstream
 ```
 

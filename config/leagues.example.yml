@@ -6,7 +6,7 @@ leagues:
   # --- ESPN pick'em (Stage 1 priority) --------------------------------
   # `challenge` is the slug in the URL when you make picks:
   #   fantasy.espn.com/games/nfl-pickem-2026/make-picks  ->  nfl-pickem-2026
-  # Known kinds ffm can build for you: nfl_pickem, nfl_pigskin, college_pickem
+  # Known kinds fcc can build for you: nfl_pickem, nfl_pigskin, college_pickem
   - key: espn_pickem
     platform: espn_pickem
     league_id: nfl-pickem-2026
@@ -16,7 +16,7 @@ leagues:
       challenge: nfl-pickem-2026
       # Set true if your pool assigns 1..N confidence points per week.
       confidence_points: false
-      # Staff picks page. `ffm pickem run` fetches this when no --picks-file
+      # Staff picks page. `fcc pickem run` fetches this when no --picks-file
       # is given. Requires FantasyGuru credentials in the secret store.
       fantasyguru_url: https://www.fantasyguru.com/nfl-bets
 

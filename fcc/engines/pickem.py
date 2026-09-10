@@ -9,7 +9,7 @@ traps this module exists to handle:
    straight-up *loss* pick. Passing the leaned side through as the winner would
    quietly tank a pick'em entry. See :func:`straight_up_side`.
 2. **Identity mismatch.** Prose names ("the Ravens") must resolve to the exact
-   option id inside an ESPN proposition. Handled by :mod:`ffm.core.teams`,
+   option id inside an ESPN proposition. Handled by :mod:`fcc.core.teams`,
    which refuses rather than guesses.
 3. **Silent partial coverage.** A week where only 11 of 16 games matched should
    not look like a successful run. Everything unmatched lands in
@@ -23,8 +23,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal
 
-from ffm.core.teams import normalize
-from ffm.platforms.espn_pickem import Pick, Proposition
+from fcc.core.teams import normalize
+from fcc.platforms.espn_pickem import Pick, Proposition
 
 log = logging.getLogger(__name__)
 
@@ -203,7 +203,7 @@ def join(
             result.review.append(
                 ReviewItem(
                     "unresolved_proposition",
-                    f"proposition {prop.id} has options ffm could not map to teams "
+                    f"proposition {prop.id} has options fcc could not map to teams "
                     f"({[o.label for o in prop.options]})",
                     sp,
                     prop,

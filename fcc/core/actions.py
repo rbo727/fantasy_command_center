@@ -24,8 +24,8 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ffm.core.config import get_settings
-from ffm.core.models import (
+from fcc.core.config import get_settings
+from fcc.core.models import (
     Action,
     ActionKind,
     ActionStatus,
@@ -34,7 +34,7 @@ from ffm.core.models import (
     tier_for,
     utcnow,
 )
-from ffm.core.notify import Notifier
+from fcc.core.notify import Notifier
 
 log = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 """Command line interface.
 
-`ffm doctor` is the important one: run it after every deploy and before trusting
+`fcc doctor` is the important one: run it after every deploy and before trusting
 any unattended job. It answers "will the 3am run actually work" while you're
 awake to do something about the answer.
 """
@@ -15,8 +15,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from ffm.core.config import get_settings
-from ffm.core.secrets import Keys, SecretsError, SecretStore
+from fcc.core.config import get_settings
+from fcc.core.secrets import Keys, SecretsError, SecretStore
 
 app = typer.Typer(add_completion=False, help="Fantasy Command Center")
 secrets_app = typer.Typer(help="Manage encrypted credentials")
@@ -42,7 +42,7 @@ def _configure(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
 def doctor() -> None:
     """Check that this host can actually do the work."""
     settings = get_settings()
-    table = Table(title="ffm doctor", show_lines=False)
+    table = Table(title="fcc doctor", show_lines=False)
     table.add_column("Check")
     table.add_column("Result")
     table.add_column("Detail", overflow="fold")
@@ -71,8 +71,8 @@ def doctor() -> None:
 
     # Database
     try:
-        from ffm.core.db import init_db, session_scope
-        from ffm.core.models import Action
+        from fcc.core.db import init_db, session_scope
+        from fcc.core.models import Action
 
         init_db()
         with session_scope() as s:
@@ -108,7 +108,7 @@ def doctor() -> None:
     try:
         store = SecretStore()
         if store.has(Keys.ESPN_SWID) and store.has(Keys.ESPN_S2):
-            from ffm.platforms.espn_pickem import ESPNPickemClient
+            from fcc.platforms.espn_pickem import ESPNPickemClient
 
             pickem_leagues = [lg for lg in leagues if lg.platform == "espn_pickem"]
             if not pickem_leagues:
@@ -137,7 +137,7 @@ def doctor() -> None:
     row(
         "pick'em write path",
         spec_path.exists() or None,
-        str(spec_path) if spec_path.exists() else "not captured — see `ffm pickem capture-write`",
+        str(spec_path) if spec_path.exists() else "not captured — see `fcc pickem capture-write`",
     )
 
     console.print(table)
@@ -155,9 +155,9 @@ def secrets_init() -> None:
     """Generate a master key. Store it in your password manager."""
     key = SecretStore.generate_key()
     console.print("Add this to your environment (or .env) on this host:\n")
-    console.print(f"[bold]FFM_MASTER_KEY={key}[/bold]\n")
+    console.print(f"[bold]FCC_MASTER_KEY={key}[/bold]\n")
     console.print(
-        "[yellow]This key is never stored by ffm. Lose it and the secret store "
+        "[yellow]This key is never stored by fcc. Lose it and the secret store "
         "must be rebuilt from scratch.[/yellow]"
     )
 
@@ -191,7 +191,7 @@ def secrets_rm(name: str) -> None:
 # pick'em
 # --------------------------------------------------------------------------
 def _pickem_client(league_key: str):
-    from ffm.platforms.espn_pickem import ESPNPickemClient, WriteSpec
+    from fcc.platforms.espn_pickem import ESPNPickemClient, WriteSpec
 
     settings = get_settings()
     league = settings.league(league_key)
@@ -236,9 +236,9 @@ def pickem_dump(
 def pickem_capture_write(
     curl_file: Path = typer.Option(..., help="File containing a 'Copy as cURL' command"),
 ) -> None:
-    """Teach ffm how to submit picks, from a request you captured."""
-    from ffm.platforms.curl_import import CurlParseError, build_write_spec
-    from ffm.platforms.espn_pickem import WriteSpec
+    """Teach fcc how to submit picks, from a request you captured."""
+    from fcc.platforms.curl_import import CurlParseError, build_write_spec
+    from fcc.platforms.espn_pickem import WriteSpec
 
     try:
         spec_kwargs, report = build_write_spec(curl_file.read_text())
@@ -258,7 +258,7 @@ def pickem_capture_write(
     if report["dropped_headers"]:
         console.print(
             f"[yellow]Dropped credential headers ({', '.join(report['dropped_headers'])}) — "
-            "ffm sends your stored ESPN cookies instead.[/yellow]"
+            "fcc sends your stored ESPN cookies instead.[/yellow]"
         )
     console.print(f"[green]Saved to {path}[/green]")
 
@@ -281,10 +281,10 @@ def pickem_run(
     submit: bool = typer.Option(False, help="Actually submit (otherwise preview only)"),
 ) -> None:
     """Match staff picks to this week's slate and submit them."""
-    from ffm.core.actions import ActionGate, Proposal, Verification
-    from ffm.core.db import init_db, session_scope
-    from ffm.core.models import ActionKind
-    from ffm.engines.pickem import StaffPick, join
+    from fcc.core.actions import ActionGate, Proposal, Verification
+    from fcc.core.db import init_db, session_scope
+    from fcc.core.models import ActionKind
+    from fcc.engines.pickem import StaffPick, join
 
     settings = get_settings()
     init_db()
@@ -293,7 +293,7 @@ def pickem_run(
     if picks_file:
         staff = [StaffPick(**item) for item in json.loads(picks_file.read_text())]
     else:
-        from ffm.sources.fantasyguru import (
+        from fcc.sources.fantasyguru import (
             FantasyGuruError,
             FantasyGuruSession,
             extract_staff_picks,
@@ -420,13 +420,13 @@ def pickem_run(
             if action.error:
                 console.print(f"[red]{action.error}[/red]")
             if settings.dry_run:
-                console.print("[yellow]FFM_DRY_RUN is on — nothing was sent.[/yellow]")
+                console.print("[yellow]FCC_DRY_RUN is on — nothing was sent.[/yellow]")
 
 
 @app.command("db-init")
 def db_init() -> None:
     """Create database tables."""
-    from ffm.core.db import init_db
+    from fcc.core.db import init_db
 
     init_db()
     console.print(f"[green]Initialised {get_settings().db_url}[/green]")

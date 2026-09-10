@@ -2,7 +2,7 @@
 
 import pytest
 
-from ffm.core.teams import TEAMS, all_codes, normalize, parse_matchup, require
+from fcc.core.teams import TEAMS, all_codes, normalize, parse_matchup, require
 
 
 def test_thirty_two_teams():

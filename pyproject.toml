@@ -1,5 +1,5 @@
 [project]
-name = "ffm"
+name = "fcc"
 version = "0.1.0"
 description = "Fantasy Command Center - cross-platform fantasy football league manager and pick'em automation"
 readme = "README.md"
@@ -47,7 +47,7 @@ dev = [
 ]
 
 [project.scripts]
-ffm = "ffm.cli:app"
+fcc = "fcc.cli:app"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -58,12 +58,12 @@ build-backend = "setuptools.build_meta"
 # Leaving it alone keeps future `git merge upstream/master` conflict-free.
 [tool.setuptools]
 packages = [
-    "ffm",
-    "ffm.core",
-    "ffm.platforms",
-    "ffm.sources",
-    "ffm.engines",
-    "ffm.api",
+    "fcc",
+    "fcc.core",
+    "fcc.platforms",
+    "fcc.sources",
+    "fcc.engines",
+    "fcc.api",
     "yahoo_fantasy_api",
 ]
 
@@ -83,7 +83,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 [tool.ruff.lint.per-file-ignores]
 # typer's whole API is Option()/Argument() in argument defaults; B008 is a
 # false positive here, not a smell worth working around.
-"ffm/cli.py" = ["B008"]
+"fcc/cli.py" = ["B008"]
 # The captured curl command is verbatim browser output; wrapping it would stop
 # it being a faithful fixture.
 "tests/test_curl_import.py" = ["E501"]

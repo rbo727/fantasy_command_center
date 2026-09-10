@@ -10,10 +10,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from ffm.core.actions import ActionGate, Proposal
-from ffm.core.db import init_db, session_scope
-from ffm.core.models import Action, ActionKind, ActionStatus, Tier, utcnow
-from ffm.core.secrets import Keys, SecretsError, SecretStore
+from fcc.core.actions import ActionGate, Proposal
+from fcc.core.db import init_db, session_scope
+from fcc.core.models import Action, ActionKind, ActionStatus, Tier, utcnow
+from fcc.core.secrets import Keys, SecretsError, SecretStore
 
 
 def test_datetimes_round_trip_timezone_aware():
@@ -85,21 +85,21 @@ def test_names_never_leak_values(master_key):
 
 def test_wrong_master_key_fails_loudly(master_key, monkeypatch):
     SecretStore().set(Keys.ESPN_SWID, "abc")
-    monkeypatch.setenv("FFM_MASTER_KEY", SecretStore.generate_key())
-    from ffm.core.config import get_settings
+    monkeypatch.setenv("FCC_MASTER_KEY", SecretStore.generate_key())
+    from fcc.core.config import get_settings
 
     get_settings.cache_clear()
-    with pytest.raises(SecretsError, match="wrong FFM_MASTER_KEY"):
+    with pytest.raises(SecretsError, match="wrong FCC_MASTER_KEY"):
         SecretStore().get(Keys.ESPN_SWID)
 
 
 def test_missing_master_key_is_a_clear_error(monkeypatch):
-    monkeypatch.delenv("FFM_MASTER_KEY", raising=False)
-    from ffm.core.config import get_settings
+    monkeypatch.delenv("FCC_MASTER_KEY", raising=False)
+    from fcc.core.config import get_settings
 
     get_settings.cache_clear()
     store = SecretStore()
-    with pytest.raises(SecretsError, match="FFM_MASTER_KEY is not set"):
+    with pytest.raises(SecretsError, match="FCC_MASTER_KEY is not set"):
         store.set("x", "y")
 
 
@@ -111,5 +111,5 @@ def test_require_names_the_missing_secret(master_key):
 def test_env_var_overrides_stored_secret(master_key, monkeypatch):
     store = SecretStore()
     store.set(Keys.ODDS_API_KEY, "from-file")
-    monkeypatch.setenv("FFM_SECRET_ODDS_API_KEY", "from-env")
+    monkeypatch.setenv("FCC_SECRET_ODDS_API_KEY", "from-env")
     assert SecretStore().get(Keys.ODDS_API_KEY) == "from-env"

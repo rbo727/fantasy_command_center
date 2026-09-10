@@ -7,8 +7,8 @@ guarantee, and the refusal to call an unconfirmed write a success.
 
 import pytest
 
-from ffm.core.actions import ActionGate, Proposal, Verification
-from ffm.core.models import ActionKind, ActionStatus, Tier, tier_for
+from fcc.core.actions import ActionGate, Proposal, Verification
+from fcc.core.models import ActionKind, ActionStatus, Tier, tier_for
 
 
 def proposal(key="k1", kind=ActionKind.PICKEM_SUBMIT, **kw) -> Proposal:
@@ -153,7 +153,7 @@ def test_submit_failure_is_captured(gate, session):
 def test_expired_action_is_skipped(gate, session):
     from datetime import timedelta
 
-    from ffm.core.models import utcnow
+    from fcc.core.models import utcnow
 
     action = gate.propose(session, proposal(expires_at=utcnow() - timedelta(minutes=1)))
     gate.execute(session, action, submit=lambda a: pytest.fail("must not submit after lock"))
@@ -163,7 +163,7 @@ def test_expired_action_is_skipped(gate, session):
 def test_action_not_yet_due_is_left_alone(gate, session):
     from datetime import timedelta
 
-    from ffm.core.models import utcnow
+    from fcc.core.models import utcnow
 
     action = gate.propose(session, proposal(execute_after=utcnow() + timedelta(hours=1)))
     gate.execute(session, action, submit=lambda a: pytest.fail("must not submit early"))
@@ -172,10 +172,10 @@ def test_action_not_yet_due_is_left_alone(gate, session):
 
 # --- dry run ---------------------------------------------------------------
 def test_dry_run_records_the_payload_without_sending(gate, session, monkeypatch):
-    from ffm.core.config import get_settings
+    from fcc.core.config import get_settings
 
     get_settings.cache_clear()
-    monkeypatch.setenv("FFM_DRY_RUN", "true")
+    monkeypatch.setenv("FCC_DRY_RUN", "true")
     dry_gate = ActionGate()
 
     action = dry_gate.propose(session, proposal())
@@ -187,7 +187,7 @@ def test_dry_run_records_the_payload_without_sending(gate, session, monkeypatch)
 def test_due_lists_only_ready_actions(gate, session):
     from datetime import timedelta
 
-    from ffm.core.models import utcnow
+    from fcc.core.models import utcnow
 
     ready = gate.propose(session, proposal(key="ready"))
     gate.propose(session, proposal(key="later", execute_after=utcnow() + timedelta(hours=2)))

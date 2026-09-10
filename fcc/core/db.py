@@ -9,8 +9,8 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from ffm.core.config import get_settings
-from ffm.core.models import Base
+from fcc.core.config import get_settings
+from fcc.core.models import Base
 
 _engine: Engine | None = None
 _Session: sessionmaker[Session] | None = None

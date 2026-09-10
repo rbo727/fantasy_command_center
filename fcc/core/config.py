@@ -39,10 +39,10 @@ class LeagueConfig(BaseModel):
 
 
 class Settings(BaseSettings):
-    """Process-wide settings, sourced from environment (prefix FFM_) and .env."""
+    """Process-wide settings, sourced from environment (prefix FCC_) and .env."""
 
     model_config = SettingsConfigDict(
-        env_prefix="FFM_",
+        env_prefix="FCC_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
@@ -105,7 +105,7 @@ class Settings(BaseSettings):
 
     @property
     def db_url(self) -> str:
-        return f"sqlite:///{self.data_path / 'ffm.db'}"
+        return f"sqlite:///{self.data_path / 'fcc.db'}"
 
     def leagues(self) -> list[LeagueConfig]:
         """Load league declarations. Missing file is not an error yet."""

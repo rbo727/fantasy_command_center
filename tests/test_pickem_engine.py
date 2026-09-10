@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ffm.engines.pickem import (
+from fcc.engines.pickem import (
     COINFLIP_EDGE,
     JoinResult,
     StaffPick,
@@ -17,7 +17,7 @@ from ffm.engines.pickem import (
     straight_up_side,
     win_probability,
 )
-from ffm.platforms.espn_pickem import Option, Pick, Proposition
+from fcc.platforms.espn_pickem import Option, Pick, Proposition
 
 
 def prop(pid: str, away: str, home: str, lock: datetime | None = None) -> Proposition:

@@ -4,7 +4,7 @@ ESPN's pick'em games live on a separate API from ESPN fantasy:
 ``gambit-api.fantasy.espn.com``. The read endpoints are well known from the
 community's endpoint catalogues; the **write** path is not published anywhere,
 so it is supplied at runtime from a request you capture once in DevTools (see
-:class:`WriteSpec` and ``ffm pickem capture-write``).
+:class:`WriteSpec` and ``fcc pickem capture-write``).
 
 Auth is the same cookie pair as ESPN fantasy: ``SWID`` and ``espn_s2``.
 
@@ -12,7 +12,7 @@ A note on the parsers below: ESPN returns large, deeply-nested documents whose
 exact field names vary by challenge and season. Everything here is written
 defensively and every extractor tries several known field spellings, because the
 alternative — assuming one shape — fails silently and submits garbage. Run
-``ffm pickem dump`` against your real account to capture live fixtures and
+``fcc pickem dump`` against your real account to capture live fixtures and
 tighten these once you have them.
 """
 
@@ -27,7 +27,7 @@ from typing import Any
 
 import httpx
 
-from ffm.core.teams import normalize
+from fcc.core.teams import normalize
 
 log = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ class WriteSpec:
     1. Open your pick'em entry, DevTools → Network, filter ``gambit``.
     2. Make one pick and submit.
     3. Right-click the resulting POST/PUT → *Copy as cURL*.
-    4. ``ffm pickem capture-write --curl-file cmd.txt``
+    4. ``fcc pickem capture-write --curl-file cmd.txt``
 
     ``body_template`` is JSON with ``{picks}`` where the pick array belongs.
     """
@@ -202,7 +202,7 @@ class ESPNPickemClient:
             headers={
                 "accept": "application/json",
                 # Identify honestly rather than impersonating a browser build.
-                "user-agent": "ffm-fantasy-manager/0.1 (personal use)",
+                "user-agent": "fantasy-command-center/0.1 (personal use)",
             },
             cookies={"SWID": self.swid, "espn_s2": self.espn_s2},
         )
@@ -296,10 +296,10 @@ class ESPNPickemClient:
             return {"submitted": 0, "note": "nothing to submit"}
         if self.write_spec is None:
             raise WriteNotConfigured(
-                "ESPN does not publish its pick-submission endpoint, so ffm replays a "
+                "ESPN does not publish its pick-submission endpoint, so fcc replays a "
                 "request captured from your browser. Capture it once with DevTools "
                 "(Network → filter 'gambit' → make a pick → Copy as cURL) and run "
-                "`ffm pickem capture-write --curl-file <file>`. "
+                "`fcc pickem capture-write --curl-file <file>`. "
                 "Until then use --dry-run, or the Playwright fallback."
             )
         spec = self.write_spec
