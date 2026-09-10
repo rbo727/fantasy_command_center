@@ -269,9 +269,14 @@ def pickem_run(
     week: int = typer.Option(None, help="Defaults to the current scoring period"),
     picks_file: Path = typer.Option(
         None,
-        help="JSON list of staff picks. Until the FantasyGuru source lands, this is "
-        "how picks get in: [{matchup, team, market, spread, conviction}]",
+        help="JSON list of staff picks, bypassing FantasyGuru: "
+        "[{matchup, team, market, spread, conviction}]",
     ),
+    fg_url: str = typer.Option(
+        None,
+        help="FantasyGuru staff-picks page. Defaults to the league's extra.fantasyguru_url.",
+    ),
+    refresh: bool = typer.Option(False, help="Ignore the cached FantasyGuru page"),
     confidence: bool = typer.Option(False, help="Assign confidence points 1..N"),
     submit: bool = typer.Option(False, help="Actually submit (otherwise preview only)"),
 ) -> None:
@@ -285,10 +290,37 @@ def pickem_run(
     init_db()
     client, lg = _pickem_client(league)
 
-    if not picks_file:
-        console.print("[red]--picks-file is required until the FantasyGuru source lands.[/red]")
-        raise typer.Exit(code=1)
-    staff = [StaffPick(**item) for item in json.loads(picks_file.read_text())]
+    if picks_file:
+        staff = [StaffPick(**item) for item in json.loads(picks_file.read_text())]
+    else:
+        from ffm.sources.fantasyguru import (
+            FantasyGuruError,
+            FantasyGuruSession,
+            extract_staff_picks,
+        )
+
+        url = fg_url or lg.extra.get("fantasyguru_url")
+        if not url:
+            console.print(
+                "[red]No source for picks. Pass --picks-file, --fg-url, or set "
+                "extra.fantasyguru_url on this league in config/leagues.yml.[/red]"
+            )
+            raise typer.Exit(code=1)
+        try:
+            html = FantasyGuruSession().fetch(url, force=refresh)
+            staff, notes = extract_staff_picks(html, week=week)
+        except FantasyGuruError as exc:
+            console.print(f"[red]FantasyGuru: {exc}[/red]")
+            raise typer.Exit(code=1) from exc
+        console.print(f"[dim]FantasyGuru: {len(staff)} picks extracted from {url}[/dim]")
+        if notes:
+            console.print(f"[yellow]Extraction notes: {notes}[/yellow]")
+        if not staff:
+            console.print(
+                "[red]No picks found on that page. Check the URL, or whether the "
+                "login/paywall is blocking it.[/red]"
+            )
+            raise typer.Exit(code=1)
 
     with client:
         props = client.propositions(week=week)

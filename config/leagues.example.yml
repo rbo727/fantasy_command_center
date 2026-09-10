@@ -15,6 +15,9 @@ leagues:
       challenge: nfl-pickem-2026
       # Set true if your pool assigns 1..N confidence points per week.
       confidence_points: false
+      # Staff picks page. `ffm pickem run` fetches this when no --picks-file
+      # is given. Requires FantasyGuru credentials in the secret store.
+      fantasyguru_url: https://www.fantasyguru.com/nfl-bets
 
   # --- Sleeper redraft ------------------------------------------------
   - key: sleeper_main

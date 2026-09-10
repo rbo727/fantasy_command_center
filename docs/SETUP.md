@@ -87,8 +87,23 @@ ffm pickem run espn_pickem --week 1 --picks-file picks.json
 ffm pickem run espn_pickem --week 1 --picks-file picks.json --submit
 ```
 
-`picks.json` is a list of staff picks. Until the FantasyGuru source lands
-(next up), this is how picks get in:
+With no `--picks-file`, ffm logs into FantasyGuru, fetches the staff-picks page
+from `extra.fantasyguru_url` (or `--fg-url`), and structures it with one Claude
+call. Store the credentials first:
+
+```bash
+ffm secrets set fantasyguru_username
+ffm secrets set fantasyguru_password
+ffm secrets set anthropic_api_key
+```
+
+The fetched page is cached for 30 minutes and the raw HTML is kept under
+`data/cache/fantasyguru/`, so a parsing problem never costs a re-fetch — and
+when the site is redesigned mid-season, the cached page is the evidence. Use
+`--refresh` to bypass the cache.
+
+`--picks-file` bypasses FantasyGuru entirely and is the fastest way to test the
+rest of the chain:
 
 ```json
 [

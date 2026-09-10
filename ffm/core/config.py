@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     discord_webhook_url: str | None = None
 
     # --- LLM (structuring FantasyGuru prose only) ------------------------
-    anthropic_model: str = "claude-sonnet-5"
+    anthropic_model: str = "claude-opus-5"
 
     # --- Secrets ---------------------------------------------------------
     #: urlsafe-base64 32-byte Fernet key. Provisioned out of band on each host;

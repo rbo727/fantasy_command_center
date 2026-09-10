@@ -14,7 +14,7 @@ unattended, and proposes the ones that cost money.
 | Stage | Scope | State |
 |---|---|---|
 | 0 | Foundations: config, secrets, DB, action gate, team resolution | done |
-| 1 | **ESPN pick'em from FantasyGuru staff picks** | client + engine + CLI done; FantasyGuru source next |
+| 1 | **ESPN pick'em from FantasyGuru staff picks** | complete pending two live steps: capture the ESPN write request, and a first run against the real FantasyGuru page |
 | 2 | Dashboard (FastAPI + React tabs) | not started |
 | 3 | Lineup guardian (never start an inactive player) | not started |
 | 4 | FAAB engine + 3am Wednesday Sleeper waiver sniper | not started |
