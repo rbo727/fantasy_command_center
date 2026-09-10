@@ -209,13 +209,22 @@ def _pickem_client(league_key: str):
 def pickem_dump(
     league: str = typer.Argument(..., help="League key from config/leagues.yml"),
     week: int = typer.Option(None),
-    out: Path = typer.Option(None, help="Where to write the raw JSON"),
+    out: Path = typer.Option(None, help="Where to write the JSON"),
+    redact_output: bool = typer.Option(
+        True,
+        "--redact/--raw",
+        help="Strip personal identifiers, keeping structure and NFL content. "
+        "Use --raw only for a file that stays on this machine.",
+    ),
 ) -> None:
-    """Save raw ESPN responses as fixtures.
+    """Save ESPN responses as a fixture.
 
     Run this once against your real account so the parsers can be validated
-    against ESPN's actual field names rather than assumed ones.
+    against ESPN's actual field names rather than assumed ones. Redacted by
+    default, so the result is safe to share.
     """
+    from fcc.platforms.redact import redact_document
+
     client, lg = _pickem_client(league)
     with client:
         payload = {
@@ -224,12 +233,44 @@ def pickem_dump(
             "challenge_info": client.challenge_info(week=week),
             "entry": client.entry(),
         }
-    target = out or (get_settings().data_path / f"pickem_dump_{lg.key}_w{week or 'cur'}.json")
-    target.write_text(json.dumps(payload, indent=2))
-    console.print(f"[green]Wrote {target}[/green]")
-    console.print(
-        "[yellow]This file contains your entry data. Review before sharing.[/yellow]"
+
+    suffix = "" if redact_output else "_raw"
+    target = out or (
+        get_settings().data_path / f"pickem_dump_{lg.key}_w{week or 'cur'}{suffix}.json"
     )
+
+    if redact_output:
+        payload, report = redact_document(payload)
+        target.write_text(json.dumps(payload, indent=2))
+
+        table = Table(title="Redacted", show_lines=False)
+        table.add_column("Path")
+        table.add_column("Values", justify="right")
+        for path, count in sorted(report.paths.items()):
+            table.add_row(path, str(count))
+        console.print(table)
+        console.print(f"[green]Wrote {target}[/green]")
+        console.print(
+            f"[dim]{report.total} identifier(s) replaced with stable pseudonyms. "
+            f"Kept {len(set(report.kept_names))} NFL name(s) such as "
+            f"{', '.join(sorted(set(report.kept_names))[:3]) or '(none found)'}.[/dim]"
+        )
+        console.print(
+            "[cyan]Structure, key names and types are unchanged, so this is still a "
+            "valid fixture — and it is safe to share.[/cyan]"
+        )
+        console.print(
+            "[yellow]Skim it before sending anywhere: redaction is default-deny, but "
+            "only you can recognise something of yours that ESPN put in an "
+            "unexpected field.[/yellow]"
+        )
+    else:
+        target.write_text(json.dumps(payload, indent=2))
+        console.print(f"[green]Wrote {target}[/green]")
+        console.print(
+            "[red]UNREDACTED — contains your ESPN account identifiers and other "
+            "entrants' names. Keep this file local.[/red]"
+        )
 
 
 @pickem_app.command("capture-write")

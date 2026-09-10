@@ -101,6 +101,19 @@ names rather than assumed ones:
 fcc pickem dump espn_pickem --week 1
 ```
 
+The dump is **redacted by default** and safe to share. Your ESPN account id,
+entry id, display name, group name and other entrants' names are replaced with
+stable pseudonyms; structure, key names, types, proposition/outcome ids and all
+NFL content are preserved, so it remains a valid fixture. The command prints
+exactly which paths it redacted.
+
+Identifiers are handled default-deny: anything id-shaped is replaced unless it
+is a known-public NFL or challenge id, so a field ESPN adds later gets redacted
+rather than leaked. Skim the file before sending it anywhere regardless — only
+you can recognise something of yours in an unexpected field.
+
+`--raw` writes the unredacted response instead. Keep those local.
+
 ## 7. Run pick'em
 
 ```bash
