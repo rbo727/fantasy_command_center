@@ -1,31 +1,174 @@
 #!/bin/python
 
-import yahoo_fantasy_api as yfa
-import mock_yhandler
+import os
+import datetime
+import pytest
 
 
-def test_matchup(sc):
-    tm = yfa.Team(sc, '268.l.46645')
-    tm.inject_yhandler(mock_yhandler.YHandler())
-    opponent = tm.matchup(3)
+DIR_PATH = os.path.dirname(os.path.realpath(__file__))
+
+
+def test_matchup(mock_team):
+    opponent = mock_team.matchup(3)
     assert(opponent == '388.l.27081.t.5')
 
 
-def test_roster(sc):
-    tm = yfa.Team(sc, '268.l.46645')
-    tm.inject_yhandler(mock_yhandler.YHandler())
-    r = tm.roster(3)
+def test_roster(mock_team):
+    r = mock_team.roster(3)
     print(r)
-    assert(len(r) == 25)
+    assert(len(r) == 22)
     print(r[21])
-    assert(r[21]['name'] == 'Brandon Woodruff')
+    assert(r[21]['name'] == 'Jack Flaherty')
     assert(r[21]['position_type'] == 'P')
-    assert(r[21]['player_id'] == 10730)
-    assert(r[21]['selected_position'] == 'BN')
+    assert(r[21]['player_id'] == 10592)
+    assert(r[21]['selected_position'] == 'IL')
     print(r[5])
-    assert(r[5]['name'] == 'Juan Soto')
+    assert(r[5]['name'] == 'Yordan Alvarez')
     assert(r[5]['position_type'] == 'B')
     assert(len(r[5]['eligible_positions']) == 2)
     assert(r[5]['eligible_positions'][0] == 'LF')
     assert(r[5]['eligible_positions'][1] == 'Util')
     assert(r[5]['selected_position'] == 'LF')
+
+
+def test_roster_editorial_team_abbr(mock_team):
+    r = mock_team.roster(3)
+    assert r[0]['name'] == 'Danny Jansen'
+    assert r[0]['editorial_team_abbr'] == 'Tor'
+    assert r[5]['name'] == 'Yordan Alvarez'
+    assert r[5]['editorial_team_abbr'] == 'Hou'
+
+
+def test_roster_status(mock_team):
+    r = mock_team.roster(3)
+    print(r)
+    assert(r[0]['name'] == 'Danny Jansen')
+    assert(r[0]['status'] == '')
+    assert(r[0]['eligible_positions'] == ['C', 'Util'])
+    assert(r[21]['name'] == 'Jack Flaherty')
+    assert(r[21]['status'] == 'IL60')
+    assert(r[21]['eligible_positions'] == ['SP', 'IL'])
+
+
+def test_proposed_trades(mock_team):
+    trs = mock_team.proposed_trades()
+    print(trs)
+    assert(len(trs) == 3)
+    assert(trs[0]['transaction_key'] == '396.l.49770.pt.1')
+    assert(len(trs[0]['trader_players']) == 1)
+    assert(trs[0]['trader_players'][0]['name'] == 'Drew Doughty')
+    assert(len(trs[0]['tradee_players']) == 1)
+    assert(trs[0]['tradee_players'][0]['name'] == 'Jacob Trouba')
+    assert(trs[1]['transaction_key'] == '396.l.49770.pt.2')
+    assert(len(trs[1]['trader_players']) == 2)
+    assert(trs[1]['trader_players'][0]['name'] == 'Claude Giroux')
+    assert(trs[1]['trader_players'][1]['name'] == 'Tuukka Rask')
+    assert(len(trs[1]['tradee_players']) == 2)
+    assert(trs[1]['tradee_players'][0]['name'] == 'Aleksander Barkov')
+    assert(trs[1]['tradee_players'][1]['name'] == 'Brayden Schenn')
+
+
+def test__construct_trade_xml(mock_team):
+    with open(f'{DIR_PATH}/accept_trade.xml', 'r') as file:
+        expected_xml = file.read().replace('  ', '\t')
+
+    transaction_key = '396.l.49770.pt.1'
+    xml = mock_team._construct_trade_xml(transaction_key, action='accept',
+                                         trade_note='Dude, that is a totally fair trade.')
+    assert xml == expected_xml
+
+
+def test__construct_trade_proposal_xml(mock_team):
+    with open(f'{DIR_PATH}/trade_proposal.xml', 'r') as file:
+        expected_xml = file.read().replace('  ', '\t')
+
+    tradee_team_key = '248.l.55438.t.4'
+    trade_note = 'Check out this trade proposal.'
+    your_player_keys = ['248.p.4130']
+    their_player_keys = ['248.p.2415']
+
+    actual_xml = mock_team._construct_trade_proposal_xml(
+        tradee_team_key, your_player_keys, their_player_keys, trade_note)
+
+    assert actual_xml == expected_xml
+
+
+def test__construct_transaction_xml(mock_team):
+    with open(f'{DIR_PATH}/add_drop_with_faab.xml', 'r') as file:
+        expected_xml = file.read().replace('  ', '\t')
+
+    action = "add/drop"
+    add_player_id = 123
+    drop_player_id = 456
+    faab = 99
+
+    actual_xml = mock_team._construct_transaction_xml(
+        action, add_player_id, drop_player_id, faab=faab
+    )
+
+    assert actual_xml == expected_xml
+
+
+def test__construct_transaction_xml_with_faab(mock_team):
+    with open(f'{DIR_PATH}/add_drop_no_faab.xml', 'r') as file:
+        expected_xml = file.read().replace('  ', '\t')
+
+    action = "add/drop"
+    add_player_id = 123
+    drop_player_id = 456
+
+    actual_xml = mock_team._construct_transaction_xml(
+        action, add_player_id, drop_player_id
+    )
+
+    assert actual_xml == expected_xml
+
+
+def test_change_roster(mock_team):
+    plyrs = [{'player_id': 5981, 'selected_position': 'BN'},
+             {'player_id': 4558, 'selected_position': 'BN'}]
+    cd = datetime.date(2019, 10, 7)
+    mock_team.change_positions(cd, plyrs)
+    assert mock_team.yhandler.roster_xml is not None
+    assert "<date>2019-10-07</date>" in mock_team.yhandler.roster_xml
+
+    mock_team.change_positions(2, plyrs)
+    assert "<date>2019-10-07</date>" not in mock_team.yhandler.roster_xml
+    assert "<week>2</week>" in mock_team.yhandler.roster_xml
+
+    with pytest.raises(Exception):
+        mock_team.change_positions("3", plyrs)
+
+
+def test_details(mock_team):
+    details = mock_team.details()
+    assert details['team_key'] == '449.l.751781.t.9'
+    assert details['team_id'] == '9'
+    assert details['name'] == 'Gibb it to me baby'
+    assert details['is_owned_by_current_login'] == 1
+
+
+def test_roster_with_dual_position_player(mock_travis_hunter_team):
+    """Test roster parsing with dual-position player (Travis Hunter).
+
+    This test reproduces issue #65 where Travis Hunter's dual-position
+    status (WR and DB) causes the roster parser to fail due to the
+    unexpected 'linked_player' field in the JSON response.
+    """
+    r = mock_travis_hunter_team.roster(week=11)
+    print(r)
+    # The roster should have 29 players.
+    assert len(r) == 29
+    # Find Travis Hunter in the roster.
+    travis = None
+    for player in r:
+        if player['name'] == 'Travis Hunter':
+            travis = player
+            break
+    assert travis is not None, "Travis Hunter not found in roster"
+    assert travis['player_id'] == 99001
+    assert travis['position_type'] == 'O'
+    assert travis['selected_position'] == 'BN'
+    # Travis Hunter should be eligible for WR, W/R, W/R/T, and DB positions.
+    assert 'WR' in travis['eligible_positions']
+    assert 'DB' in travis['eligible_positions']

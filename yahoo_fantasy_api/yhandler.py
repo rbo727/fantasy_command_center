@@ -1,9 +1,12 @@
 #!/bin/python
 
+import datetime
 import json
-import time
+import logging
 
 YAHOO_ENDPOINT = 'https://fantasysports.yahooapis.com/fantasy/v2'
+
+logger = logging.getLogger(__name__)
 
 
 class YHandler:
@@ -12,38 +15,181 @@ class YHandler:
     def __init__(self, sc):
         self.sc = sc
 
+    def _is_token_expired_error(self, response):
+        """Check if the response indicates an expired OAuth token.
+
+        :param response: HTTP response object
+        :return: True if the error is due to an expired token
+        """
+        if response.status_code != 401 and response.status_code != 403:
+            return False
+
+        try:
+            # Check for OAuth token_expired error in response.
+            content = response.content.decode('utf-8')
+            if 'token_expired' in content or 'oauth_problem' in content:
+                logger.info("Token expired, attempting refresh")
+                return True
+
+            # Also check JSON response format.
+            try:
+                jresp = response.json()
+                if 'error' in jresp:
+                    error_desc = str(jresp['error']).lower()
+                    if 'token_expired' in error_desc or 'oauth' in error_desc:
+                        logger.info("Token expired, attempting refresh")
+                        return True
+            except (json.JSONDecodeError, ValueError):
+                pass
+        except Exception as e:
+            logger.warning(f"Exception while checking token expiration: {e}")
+            pass
+
+        return False
+
+    def _refresh_token_and_retry(self, method_name, *args, **kwargs):
+        """Refresh the OAuth token and retry the request.
+
+        :param method_name: The HTTP method name ('get', 'put', or 'post')
+        :param args: Positional arguments to pass to the method
+        :param kwargs: Keyword arguments to pass to the method
+        :return: Response from the retried request
+        :raises: RuntimeError if refresh fails or retry fails
+        """
+        # Check if token refresh is available.
+        if not hasattr(self.sc, 'refresh_access_token'):
+            logger.error("Token expired but refresh not available")
+            raise RuntimeError(b"Token expired and refresh not available")
+
+        # Attempt to refresh the token.
+        try:
+            credentials = self.sc.refresh_access_token()
+            # Update the session with new token.
+            self.sc.access_token = credentials['access_token']
+            self.sc.session = self.sc.oauth.get_session(token=self.sc.access_token)
+            logger.info("OAuth token refreshed successfully")
+        except Exception as e:
+            logger.error(f"Failed to refresh OAuth token: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to refresh OAuth token: {e}".encode())
+
+        # Retry the original request with the NEW session.
+        method = getattr(self.sc.session, method_name)
+        return method(*args, **kwargs)
+
     def get(self, uri):
         """Send an API request to the URI and return the response as JSON
 
         :param uri: URI of the API to call
         :type uri: str
-        :return: JSON document of the reponse
+        :return: JSON document of the response
         :raises: RuntimeError if any response comes back with an error
         """
-        wait_time = 240
-        total_wait = 0
-        while True:
-            response = self.sc.get(uri, params={'format': 'json'})
-            #print("issued request at {}, response code {}, wait_time {}, total_wait {}".format(time.time(), response.status_code, wait_time, total_wait))
-            if response.status_code == 999:
-                time.sleep(wait_time)
-                #wait_time = wait_time * 2
-                total_wait = total_wait+wait_time
-            else:
-                break
+        full_url = "{}/{}".format(YAHOO_ENDPOINT, uri)
+        response = self.sc.session.get(full_url, params={'format': 'json'})
 
+        # If token expired, refresh and retry once.
+        if self._is_token_expired_error(response):
+            response = self._refresh_token_and_retry(
+                'get',
+                full_url,
+                params={'format': 'json'}
+            )
 
+        if response.status_code != 200:
+            raise RuntimeError(response.content)
         jresp = response.json()
-        if "error" in jresp:
-            raise RuntimeError(json.dumps(jresp))
         return jresp
+
+    def put(self, uri, data):
+        """Calls the PUT method to the uri with a payload
+
+        :param uri: URI of the API to call
+        :type uri: str
+        :param data: What to pass as the payload
+        :type data: str
+        :return: XML document of the response
+        :raises: RuntimeError if any response comes back with an error
+        """
+        headers = {'Content-Type': 'application/xml'}
+        response = self.sc.session.put("{}/{}".format(YAHOO_ENDPOINT, uri),
+                                       data=data, headers=headers)
+
+        # If token expired, refresh and retry once.
+        if self._is_token_expired_error(response):
+            response = self._refresh_token_and_retry(
+                'put',
+                "{}/{}".format(YAHOO_ENDPOINT, uri),
+                data=data,
+                headers=headers
+            )
+
+        if response.status_code != 200:
+            raise RuntimeError(response.content)
+        return response
+
+    def post(self, uri, data):
+        """Calls the POST method to the URI with a payload
+
+        :param uri: URI of the API to call
+        :type uri: str
+        :param data: What to pass as the payload
+        :type data: str
+        :return: XML document of the response
+        :raises: RuntimeError if any response comes back with an error
+        """
+        headers = {'Content-Type': 'application/xml'}
+        response = self.sc.session.post("{}/{}".format(YAHOO_ENDPOINT, uri),
+                                        data=data, headers=headers)
+
+        # If token expired, refresh and retry once.
+        if self._is_token_expired_error(response):
+            response = self._refresh_token_and_retry(
+                'post',
+                "{}/{}".format(YAHOO_ENDPOINT, uri),
+                data=data,
+                headers=headers
+            )
+
+        if response.status_code != 201:
+            raise RuntimeError(response.content)
+        return response
 
     def get_teams_raw(self):
         """Return the raw JSON when requesting the logged in players teams.
 
         :return: JSON document of the request.
         """
-        return self.get("users;use_login=1/games;is_available=1/teams")
+        return self.get("users;use_login=1/games/teams")
+
+    def get_leagues_raw(self, is_available=False, game_types=None, game_codes=None, seasons=None):
+        """Return the raw JSON when requesting the logged in players leagues.
+
+        :param is_available: Filter the leagues to only those that are Available
+        :type is_available: bool
+        :param game_types: Filter the leagues to only those that are of the given types
+        :type game_types: list[str]
+        :param game_codes: Filter the leagues to only those that are of the given game codes
+        :type game_codes: list[str]
+        :param season: Filter the leagues to only those that are of the given season
+        :type seasons: list[str]
+        :return: JSON document of the request.
+        """
+        is_available = 1 if is_available else 0
+        game_types = ",".join(game_types) if game_types is not None else ""
+        game_codes = ",".join(game_codes) if game_codes is not None else ""
+        seasons = ",".join(seasons) if seasons is not None else ""
+        return self.get(
+            "users/games/leagues?use_login=1&is_available={}&game_types={}&game_codes={}&seasons={}".format(
+                is_available, game_types, game_codes, seasons))
+
+    def get_teams_by_keys_raw(self, team_keys):
+        """Return the raw JSON when requesting details of a team.
+
+        :param team_keys: List of team keys to fetch the details For
+        :type team_keys: list[str]
+        :return: JSON document of the request.
+        """
+        return self.get("teams;team_keys={}".format(",".join(team_keys)))
 
     def get_standings_raw(self, league_id):
         """Return the raw JSON when requesting standings for a league.
@@ -74,27 +220,27 @@ class YHandler:
         """
         return self.get("team/{}/matchups;weeks={}".format(team_key, week))
 
-    def get_daily_roster_raw(self, team_key, date):
-        """Return the raw JSON when requesting a team's daily roster
+    def get_roster_raw(self, team_key, week=None, day=None):
+        """Return the raw JSON when requesting a team's roster
 
-        :param team_key: Team key identifier to find the roster for a given team
-        :type team_key: str
-        :param date: What date to request the roster for. (YYYY-MM-DD)
-        :type date: str
-        :return: JSON of the request
-        """
-        return self.get("team/{}/roster;type=date;date={}".format(team_key, date))
+        Can request a roster for a given week or a given day.  If neither is
+        given the current day's roster is returned.
 
-    def get_weekly_roster_raw(self, team_key, week):
-        """Return the raw JSON when requesting a team's weekly roster
-
-        :param team_key: Team key identifier to find the roster for
+        :param team_key: Team key identifier to find the matchups for
         :type team_key: str
         :param week: What week number to request the roster for?
         :type week: int
+        :param day: What day number to request the roster
+        :type day: datetime.date
         :return: JSON of the request
         """
-        return self.get("team/{}/roster;week={}".format(team_key, week))        
+        if week is not None:
+            param = ";week={}".format(week)
+        elif day is not None:
+            param = ";date={}".format(day.strftime("%Y-%m-%d"))
+        else:
+            param = ""
+        return self.get("team/{}/roster{}".format(team_key, param))
 
     def get_scoreboard_raw(self, league_id, week=None):
         """Return the raw JSON when requesting the scoreboard for a week
@@ -113,7 +259,7 @@ class YHandler:
     def get_players_raw(self, league_id, start, status, position=None):
         """Return the raw JSON when requesting players in the league
 
-        The result is limited to 25 players.  the first 1000 players.
+        The result is limited to 25 players.
 
         :param league_id: League ID to get the players for
         :type league_id: str
@@ -135,51 +281,226 @@ class YHandler:
             pos_parm = ""
         else:
             pos_parm = ";position={}".format(position)
-        return self.get("league/{}/players;start={};count=25;status={}{}".
-                        format(league_id, start, status, pos_parm))
-    
-    def get_player_raw(self, league_id, player_name):
+        return self.get(
+            "league/{}/players;start={};count=25;status={}{}/percent_owned".
+            format(league_id, start, status, pos_parm))
+
+    def get_player_raw(self, league_id, search=None, ids=None):
         """Return the raw JSON when requesting player details
 
-        
         :param league_id: League ID to get the player for
         :type league_id: str
-        :param player_name: Name of player to get the details for
-        :type player_name: str
+        :param search: Search string to apply.  This can be a full or partial
+            name of a player.  Cannot be used with ids.
+        :type search: str
+        :param ids: Set of player IDs to lookup.  Cannot be used with search.
+        :type ids: list
         :return: JSON document of the request.
         """
-        player_stat_uri = ""
-        if player_name is not None:
-            player_stat_uri = "players;search={}/stats".format(player_name)
-        return self.get("league/{}/{}".format(league_id, player_stat_uri))
+        if search is not None:
+            assert(ids is None)
+            players_uri = "search={}".format(search)
+        elif ids is not None and len(ids) > 0:
+            assert(search is None)
+            # Construct a player key by prefixing the start of the league ID
+            lg_pref = league_id[0:league_id.find('.')]
+            players_uri = "player_keys=" + ",".join(
+                "{}.p.{}".format(lg_pref, i) for i in ids)
+        else:
+            raise RuntimeError(
+                "Must use search or ids options to filter players.")
+        return self.get("league/{}/players;{}/stats".format(league_id,
+                                                            players_uri))
 
-    def get_daily_team_stats_raw(self, team_key, date):
-        """Return the raw JSON when requesting a team's stats for the given week
+    def get_percent_owned_raw(self, league_id, player_ids):
+        """Return the raw JSON when requesting the percentage owned of players
 
-        :param team_key: Team key identifier
-        :type team_key: str
-        :param date: What date to request the stats from
-        :type date: string (year-month-day)
-        :return: JSON of the request
+        :param league_id: League ID we are requesting data from
+        :type league_id: str
+        :param player_ids: Yahoo! Player IDs to retrieve % owned for
+        :type player_ids: list(str)
+        :return: JSON document of the request
         """
-        return self.get("team/{}/stats;type=date;date={}".format(team_key, date))
+        lg_pref = league_id[0:league_id.find(".")]
+        joined_ids = ",".join([lg_pref + ".p." + str(i) for i in player_ids])
+        return self.get(
+            "league/{}/players;player_keys={}/percent_owned".
+            format(league_id, joined_ids))
 
-    def get_weekly_team_stats_raw(self, team_key, week):
-        """Return the raw JSON when requesting a team's stats for the given week
+    def get_player_ownership_raw(self, league_id, player_ids):
+        """Return the raw JSON when requesting the ownership of players
 
-        :param team_key: Team key identifier
-        :type team_key: str
-        :param week: What week to request the stats from
-        :type week: string (year-month-day)
-        :return: JSON of the request
+        :param league_id: League ID we are requesting data from
+        :type league_id: str
+        :param player_ids: Yahoo! Player IDs to retrieve % owned for
+        :type player_ids: list(int)
+        :return: JSON document of the request
         """
-        return self.get("team/{}/stats;type=week;week={}".format(team_key, week))
+        lg_pref = league_id[0:league_id.find(".")]
+        joined_ids = ",".join([lg_pref + ".p." + str(i) for i in player_ids])
+        return self.get(
+            "league/{}/players;player_keys={}/ownership".
+            format(league_id, joined_ids))
 
-    def get_team_raw(self, team_key):
-        """Return the raw JSON of the Team Resource
+    def put_roster(self, team_key, xml):
+        """Calls PUT against the roster API passing it an xml document
 
-        :param team_key: Team key identifier
+        :param team_key: The key of the team the roster move applies too
         :type team_key: str
-        :return: JSON of the request
+        :param xml: The XML document to send
+        :type xml: str
+        :return: Response from the PUT
         """
-        return self.get("team/{}".format(team_key))
+        return self.put("team/{}/roster".format(team_key), xml)
+
+    def post_transactions(self, league_id, xml):
+        """Calls POST against the transaction API passing it an xml document
+
+        :param league_id: The league ID that the API request applies to
+        :type league_id: str
+        :param xml: The XML document to send as the payload
+        :type xml: str
+        :return: Response from the POST
+        """
+        return self.post("league/{}/transactions".format(league_id), xml)
+
+    def get_team_transactions(self, league_id, team_key, tran_type):
+        """
+        Calls GET to retrieve transactions for a team of a given type.
+
+        :param league_id: The league ID that the API request applies to
+        :type league_id: str
+        :param team_key: The key of the team the roster move applies too
+        :type team_key: str
+        :param tran_type: The type of transaction retrieve.  Valid values
+        are: waiver or pending_trade
+        :return: Response from the GET
+        """
+        return self.get(
+            "league/{}/transactions;team_key={};type={}".format(
+                league_id, team_key, tran_type))
+
+    def get_transactions_raw(self, league_id, tran_types, count):
+        """
+        Calls GET to retrieve transactions of a given type.
+
+        :param league_id: The league ID that the API request applies to
+        :type league_id: str
+        :param tran_types: The comman seperated types of transactions retrieve.  Valid values
+        are: add,drop,commish,trade
+        :type tran_types str
+        :param count: The number of transactions to retrieve. Leave blank to return all
+        transactions
+        :type count str
+        :return: Response from the GET
+        """
+        return self.get(
+            "league/{}/transactions;types={};count={}".format(
+                league_id, tran_types, count))
+
+    def put_transaction(self, transaction_key, xml):
+        """
+        PUT to the transaction API
+
+        This can be used to accept/reject trades, voting for/against a trade,
+        and editing a waiver claim.
+
+        :param xml: The XML document to send
+        :type xml: str
+        :return: Response from the PUT
+        """
+        return self.put("transaction/" + str(transaction_key), xml)
+
+    def get_player_stats_raw(self, league_id, player_ids, req_type, date,
+                             week, season):
+        """
+        GET stats for a list of player IDs
+
+        :param league_id: The league id the players belong too.
+        :type game_code: str
+        :param player_ids: Yahoo! player IDs we are requesting stats for
+        :type player_ids: list(int)
+        :param req_type: The request type.  This defines the range of dates to
+            return the stats for.
+        :param date: When req_type == 'date', this is the date we want the
+            stats for.  If None, we'll get the stats for the current date.
+        :type date: datetime.date
+        :param week: NFL ONLY: When req_type == 'week', this is the week we want
+            the stats for.  If None, we'll get the stats for the current week
+        :type season: int
+        :param season: When req_type == 'season', this is the season we want
+            the stats for.  If None, we'll get the stats for the current season
+        :type season: int
+        :return: Response from the GET call
+        """
+        uri = self._build_player_stats_uri(league_id, player_ids, req_type,
+                                           date, week, season)
+        return self.get(uri)
+
+    def get_draftresults_raw(self, league_id):
+        """
+        GET draft results for the league
+
+        :param league_id: The league ID that the API request applies to
+        :type league_id: str
+        :return: Response from the GET call
+        """
+        return self.get("league/{}/draftresults".format(league_id))
+
+    def _build_player_stats_uri(self, league_id, player_ids, req_type, date,
+                                week, season):
+        uri = "league/{}/players;player_keys=".format(league_id)
+        game_code = league_id[:3]
+        if isinstance(player_ids, list):
+            for i, p in enumerate(player_ids):
+                if i != 0:
+                    uri += ","
+                uri += "{}.p.{}".format(game_code, p)
+        uri += "/stats;{}".format(self._get_stats_type(req_type, date, week, season))
+        return uri
+
+    def _get_stats_type(self, req_type, date, week, season):
+        if req_type == 'season':
+            if season is None:
+                return "type=season"
+            else:
+                return "type=season;season={}".format(season)
+        elif req_type == 'week':
+            if week is None:
+                return "type=week"
+            else:
+                return "type=week;week={}".format(week)
+        elif req_type == 'average_season':
+            if season is None:
+                return "type=average_season"
+            else:
+                return "type=average_season;season={}".format(season)
+        elif req_type == 'date':
+            if date is None:
+                date = datetime.date.today()
+            if isinstance(date, datetime.date) or isinstance(date, datetime.datetime):
+                return "type=date;date={}".format(date.strftime("%Y-%m-%d"))
+            else:
+                return "type=date;date={}".format(date)
+        elif req_type in ['lastweek', 'lastmonth']:
+            return "type={}".format(req_type)
+        else:
+            assert(False), "Unknown req_type type: {}".format(req_type)
+
+    def get_game_raw(self, game_code):
+        """Return the raw JSON when requesting details of a game.
+
+        :param game_code: Game code to get the standings for. (nfl,mlb,nba, nhl)
+        :type game_code: str
+        :return: JSON document of the request.
+        """
+        return self.get("game/{}".format(game_code))
+
+    def get_league_teams_raw(self, league_id):
+        """Return the raw JSON when requesting the teams in a league
+
+        :param league_id: League ID to get the teams for
+        :type league_id: str
+        :return: JSON document of the request.
+        """
+        return self.get("league/{}/teams".format(league_id))
