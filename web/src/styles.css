@@ -1,0 +1,150 @@
+/* Tokens follow the project's dataviz palette: fixed status colors, text in
+   text tokens (never a status color), dark mode selected rather than flipped. */
+:root {
+  color-scheme: light;
+  --surface-0: #f4f4f2;
+  --surface-1: #fcfcfb;
+  --surface-2: #eeeeeb;
+  --border: #dcdcd6;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #77756f;
+
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --accent: #2a78d6;
+
+  --radius: 10px;
+  --gap: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --border: #34342f;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #94938a;
+    --accent: #3987e5;
+  }
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --surface-0: #121211;
+  --surface-1: #1a1a19;
+  --surface-2: #232322;
+  --border: #34342f;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #94938a;
+  --accent: #3987e5;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.shell { max-width: 1100px; margin: 0 auto; padding-block: 24px; padding-inline: 16px; }
+
+header.masthead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+header.masthead h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+header.masthead .sub { color: var(--text-muted); font-size: 13px; }
+
+/* --- dry-run banner: the app's most important piece of state --- */
+.banner {
+  display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--border); border-left: 3px solid var(--warning);
+  background: var(--surface-1); border-radius: var(--radius);
+  padding: 10px 14px; margin: 16px 0; color: var(--text-secondary);
+}
+.banner.live { border-left-color: var(--critical); }
+
+/* --- tabs --- */
+nav.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: var(--gap); flex-wrap: wrap; }
+nav.tabs button {
+  appearance: none; background: none; border: 0; border-bottom: 2px solid transparent;
+  padding: 10px 14px; font: inherit; color: var(--text-secondary); cursor: pointer;
+}
+nav.tabs button[aria-selected='true'] { color: var(--text-primary); border-bottom-color: var(--accent); font-weight: 600; }
+.count {
+  display: inline-block; margin-left: 6px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 1px 8px; font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  vertical-align: middle;
+}
+
+/* --- cards & tiles --- */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--gap); }
+.card {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px;
+}
+.card h3 { margin: 0 0 2px; font-size: 15px; }
+.card .platform { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+
+.tiles { display: flex; gap: 18px; margin-top: 12px; flex-wrap: wrap; }
+.tile .value { font-size: 22px; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.tile .label { color: var(--text-muted); font-size: 12px; }
+
+/* --- status: colour is never the only signal (icon + label always) --- */
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+.status .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.status .glyph { font-size: 12px; line-height: 1; }
+.status[data-tone='good'] .dot { background: var(--good); }
+.status[data-tone='warning'] .dot { background: var(--warning); }
+.status[data-tone='serious'] .dot { background: var(--serious); }
+.status[data-tone='critical'] .dot { background: var(--critical); }
+.status[data-tone='neutral'] .dot { background: var(--text-muted); }
+
+/* --- tables --- */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr.problem td { background: color-mix(in srgb, var(--critical) 8%, transparent); }
+
+/* --- action queue --- */
+.action { display: flex; gap: 14px; align-items: flex-start; justify-content: space-between; }
+.action .body { min-width: 0; }
+.action .kind { font-weight: 600; }
+.action .rationale { color: var(--text-secondary); margin: 4px 0 8px; }
+pre.payload {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; margin: 0; overflow-x: auto; font-size: 12px; color: var(--text-secondary);
+}
+.buttons { display: flex; gap: 8px; flex: none; }
+button.act {
+  appearance: none; font: inherit; cursor: pointer; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-primary);
+  padding: 7px 13px;
+}
+button.act.primary { border-color: transparent; background: var(--accent); color: #fff; }
+button.act:disabled { opacity: .5; cursor: not-allowed; }
+
+/* The reject reason is a text field, not a button - it needs its own affordance
+   and a placeholder that stays legible on the dark surface. */
+input.text-input {
+  font: inherit; padding: 7px 11px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+}
+input.text-input::placeholder { color: var(--text-muted); }
+input.text-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.empty { color: var(--text-muted); padding: 28px 4px; text-align: center; }
+.error {
+  border: 1px solid var(--border); border-left: 3px solid var(--critical);
+  background: var(--surface-1); border-radius: var(--radius); padding: 10px 14px;
+  color: var(--text-secondary); margin-bottom: var(--gap);
+}
+.stack { display: flex; flex-direction: column; gap: var(--gap); }

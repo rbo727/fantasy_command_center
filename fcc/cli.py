@@ -464,6 +464,37 @@ def pickem_run(
                 console.print("[yellow]FCC_DRY_RUN is on — nothing was sent.[/yellow]")
 
 
+@app.command()
+def serve(
+    host: str = typer.Option(
+        "127.0.0.1",
+        help="Bind address. Localhost by default — this server holds write access "
+        "to your leagues, so reach it over an SSH tunnel rather than exposing it.",
+    ),
+    port: int = typer.Option(8765),
+    reload: bool = typer.Option(False, help="Auto-reload on code changes (development)"),
+) -> None:
+    """Run the dashboard."""
+    import uvicorn
+
+    from fcc.api.app import FRONTEND_MOUNTED
+
+    if not FRONTEND_MOUNTED:
+        console.print(
+            "[yellow]The dashboard front end has not been built — serving the API only.\n"
+            "Build it with `cd web && npm install && npm run build`, or run "
+            "`npm run dev` in another terminal for hot reload.[/yellow]"
+        )
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        console.print(
+            f"[red]Binding to {host}, not localhost. This server can change your "
+            "lineups and spend FAAB — make sure something in front of it is doing "
+            "authentication.[/red]"
+        )
+    console.print(f"[green]http://{host}:{port}[/green]")
+    uvicorn.run("fcc.api.app:app", host=host, port=port, reload=reload)
+
+
 @app.command("db-init")
 def db_init() -> None:
     """Create database tables."""

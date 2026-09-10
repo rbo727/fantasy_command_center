@@ -29,6 +29,7 @@ library it depends on. Knowing which is which saves a lot of confusion.
 | `tests/` | Application tests. |
 | `docs/SETUP.md` | **How to run it — start here.** |
 | `config/` | Your league declarations (`leagues.example.yml`). |
+| `web/` | The dashboard front end (Vite + React). |
 | `yahoo_fantasy_api/` | Vendored upstream library. Tracks spilchen unmodified — do not rename this directory, `import yahoo_fantasy_api` depends on it. |
 | `README.rst`, `docs/*.rst`, `docs/conf.py`, `setup.py`, `.readthedocs.yaml`, `requirements.txt` | The **vendored library's** own docs and packaging, describing the Yahoo API bindings rather than this project. Left untouched so `git merge upstream/master` stays conflict-free. |
 
@@ -41,7 +42,7 @@ vendored library and is not this project's build config.
 |---|---|---|
 | 0 | Foundations: config, secrets, DB, action gate, team resolution | done |
 | 1 | **ESPN pick'em from FantasyGuru staff picks** | complete pending two live steps: capture the ESPN write request, and a first run against the real FantasyGuru page |
-| 2 | Dashboard (FastAPI + React tabs) | not started |
+| 2 | Dashboard (FastAPI + React tabs), Sleeper read connector | backend + UI done; Sleeper verified against fixtures, needs one live run |
 | 3 | Lineup guardian (never start an inactive player) | not started |
 | 4 | FAAB engine + 3am Wednesday Sleeper waiver sniper | not started |
 | 5 | Survivor engine (win prob × popularity × future value) | not started |

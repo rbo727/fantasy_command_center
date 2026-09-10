@@ -165,3 +165,35 @@ never submitted.
 - Every write is a row in the `actions` table, and is read back from the
   platform afterwards. A write that isn't confirmed is recorded `unverified`
   and notified — never silently counted as success.
+
+## 8. The dashboard
+
+```bash
+cd web && npm install && npm run build && cd ..
+fcc serve
+```
+
+Then open <http://127.0.0.1:8765>.
+
+`fcc serve` binds to **localhost by default and should stay that way**. It can
+change your lineups and spend FAAB, and it has no authentication of its own —
+reach it from the seedbox over an SSH tunnel:
+
+```bash
+ssh -N -L 8765:127.0.0.1:8765 you@your-seedbox
+```
+
+Three tabs:
+
+- **Overview** — what needs a decision. Money-tier actions waiting on you, plus
+  any write that failed or came back unverified. This is the tab that matters.
+- **Leagues** — record, week, FAAB remaining, waiver position, and the roster
+  with injury status per slot. Unavailable starters are highlighted.
+- **Action log** — every mutation the app has proposed or made.
+
+A league that can't be read shows its error on its own card; the rest of the
+page still works. A platform that isn't wired up yet is shown differently from
+one that is broken, so "Stage 3 hasn't happened" never looks like an outage.
+
+For front-end work, `npm run dev` in `web/` gives hot reload and proxies `/api`
+to `fcc serve` on port 8765.
