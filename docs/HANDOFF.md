@@ -6,8 +6,19 @@ access. Read `CLAUDE.md` first for the invariants; this file is the situational
 state.
 
 **Date of handoff:** 2026-09-13, NFL Week 2.
-**Branch:** `claude/fantasy-football-manager-crzt3h`
-**Tests at handoff:** 274 app + 61 vendored library, all passing; ruff clean.
+**Branch:** `master` (the feature branch was merged into it; both track together).
+**Tests at handoff:** 236 app + 61 vendored library, all passing; ruff clean.
+
+## Start here
+
+```bash
+cd ~/Python/fantasy_command_center
+git pull
+source .venv/bin/activate       # `fcc` only exists while the venv is active
+claude                          # CLAUDE.md loads automatically
+```
+
+Then: *"Read docs/HANDOFF.md and start on Task 1."*
 
 ---
 
@@ -28,23 +39,23 @@ credentials are on this machine. **Prefer real data over more fixtures.**
 |---|---|
 | Action gate, teams, status normalization, lineup engine, redaction, pick'em join | **Verified.** Pure logic, thoroughly tested. Trust these. |
 | FastAPI + dashboard | **Verified by running it** — server served the built UI and a real browser click moved an action to `approved` in the DB. |
-| Sleeper connector | **Assumed.** Field names come from `docs.sleeper.com`. Never executed against the live API. |
+| Sleeper connector | **Partly live-verified.** The user ran it against their real league: league and team resolve correctly, so `league_id`/`team_id` and the `owner_id` roster match work. **Slot alignment, FAAB remaining and injury-status mapping are still unchecked** — see Task 1. |
 | ESPN pick'em *reads* | **Assumed.** Parsers try several field spellings because the real ones were never observed. |
 | ESPN pick'em *writes* | **Unknown.** ESPN publishes no submission endpoint. Handled by replaying a request the user captures in DevTools. |
 | FantasyGuru login + extraction | **Assumed.** Login selectors are a guess; the page was never loaded. |
 
 ---
 
-## Task 1 — Verify Sleeper against the live API (start here)
+## Task 1 — Finish verifying Sleeper (start here)
 
-Cheapest possible win: Sleeper reads need **no credentials at all**.
+Already confirmed live: `fcc doctor` passes, and the Leagues tab shows the right
+league and team. What remains is the part that fails *silently*.
 
 ```bash
-fcc doctor
 fcc serve        # Leagues tab → expand Roster
 ```
 
-Then confirm against the Sleeper app itself:
+Open the Sleeper app beside it and confirm:
 
 - Do the starters land in the **right slots**? `build_slots` aligns `starters`
   positionally against non-bench `roster_positions`; this is the highest-risk
@@ -108,6 +119,18 @@ at least once. A flipped sign silently inverts every downstream pick, and the
 tests can only pin the convention, not whether the model read the page right.
 
 ## Task 5 — Stage 4 (the write connectors)
+
+The **FAAB bid model** (`fcc/engines/faab.py`) already exists and is tested —
+pure logic, so it was buildable without network access. It is not yet wired to
+anything: nothing calls `parse_winning_bids` against a real transaction log, and
+no command turns a recommendation into a `WAIVER_CLAIM` proposal. Wiring it is a
+good first Stage 4 task, and Sleeper's transaction history
+(`/v1/league/<id>/transactions/<week>`) is readable without auth, so the
+calibration half can be verified immediately.
+
+Watch for: the model returns `None` when there is no projection. Route that to
+review — do not substitute a default bid.
+
 
 Stage 3's guardian currently detects but cannot act: `--submit` records the plan
 and says so. Unblocking it means:
