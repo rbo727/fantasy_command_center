@@ -43,7 +43,7 @@ vendored library and is not this project's build config.
 | 0 | Foundations: config, secrets, DB, action gate, team resolution | done |
 | 1 | **ESPN pick'em from FantasyGuru staff picks** | complete pending two live steps: capture the ESPN write request, and a first run against the real FantasyGuru page |
 | 2 | Dashboard (FastAPI + React tabs), Sleeper read connector | backend + UI done; Sleeper verified against fixtures, needs one live run |
-| 3 | Lineup guardian (never start an inactive player) | not started |
+| 3 | Lineup guardian (never start an inactive player) | detection + planning done and tested; **submitting** swaps waits on the Stage 4 write connectors |
 | 4 | FAAB engine + 3am Wednesday Sleeper waiver sniper | not started |
 | 5 | Survivor engine (win prob × popularity × future value) | not started |
 | 6 | Harden and deploy to the seedbox | not started |

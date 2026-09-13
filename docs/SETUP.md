@@ -197,3 +197,28 @@ one that is broken, so "Stage 3 hasn't happened" never looks like an outage.
 
 For front-end work, `npm run dev` in `web/` gives hot reload and proxies `/api`
 to `fcc serve` on port 8765.
+
+## 9. Lineup guardian
+
+```bash
+fcc lineup check                 # every league
+fcc lineup check sleeper_main --week 5
+```
+
+It finds starters who **definitely** cannot play — OUT, IR, suspended, PUP,
+inactive, or on bye — and names the best eligible bench replacement. Exit code
+is non-zero when anything needs attention, so a cron wrapper can alert on it.
+
+What it deliberately will **not** do:
+
+- swap a **Questionable** starter (benching someone who then plays is its own
+  loss) — it warns instead
+- fill a slot type it doesn't recognise, since guessing a slot's rules produces
+  illegal lineups that look correct
+- use one bench player for two holes
+- start anyone unavailable, including a bench player on bye
+
+`--submit` currently records the swaps without sending them: no platform write
+connector exists yet. Yahoo has `change_positions` available through the merged
+library and Sleeper needs its authenticated GraphQL path — both land in Stage 4.
+Until then the guardian is an alarm, not an autopilot.

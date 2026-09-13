@@ -21,8 +21,10 @@ from fcc.core.secrets import Keys, SecretsError, SecretStore
 app = typer.Typer(add_completion=False, help="Fantasy Command Center")
 secrets_app = typer.Typer(help="Manage encrypted credentials")
 pickem_app = typer.Typer(help="ESPN pick'em automation")
+lineup_app = typer.Typer(help="Lineup guardian")
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(pickem_app, name="pickem")
+app.add_typer(lineup_app, name="lineup")
 
 console = Console()
 
@@ -462,6 +464,109 @@ def pickem_run(
                 console.print(f"[red]{action.error}[/red]")
             if settings.dry_run:
                 console.print("[yellow]FCC_DRY_RUN is on — nothing was sent.[/yellow]")
+
+
+# --------------------------------------------------------------------------
+# lineup guardian
+# --------------------------------------------------------------------------
+@lineup_app.command("check")
+def lineup_check(
+    league: str = typer.Argument(None, help="League key; omit to check every league"),
+    week: int = typer.Option(None),
+    submit: bool = typer.Option(
+        False, help="Submit the swaps (requires a platform write connector)"
+    ),
+) -> None:
+    """Find starters who cannot play, and who should replace them."""
+    from fcc.core.actions import ActionGate, Proposal
+    from fcc.core.db import init_db, session_scope
+    from fcc.core.models import ActionKind
+    from fcc.engines.lineup import plan_lineup
+    from fcc.platforms.registry import UnsupportedPlatform, connector_for
+
+    settings = get_settings()
+    init_db()
+    keys = [league] if league else [lg.key for lg in settings.leagues() if lg.enabled]
+    if not keys:
+        console.print("[yellow]No leagues configured.[/yellow]")
+        raise typer.Exit(code=1)
+
+    any_problem = False
+    for key in keys:
+        try:
+            lg = settings.league(key)
+            connector = connector_for(lg)
+            roster = connector.roster(week=week)
+        except UnsupportedPlatform as exc:
+            console.print(f"[dim]{key}: {exc}[/dim]")
+            continue
+        except Exception as exc:  # noqa: BLE001 - one league must not stop the sweep
+            console.print(f"[red]{key}: {type(exc).__name__}: {exc}[/red]")
+            continue
+
+        plan = plan_lineup(roster, week=week)
+        console.print(f"\n[bold]{key}[/bold] — week {roster.week or '?'} — {plan.summary()}")
+
+        if plan.swaps:
+            any_problem = True
+            table = Table(show_lines=False)
+            table.add_column("Slot")
+            table.add_column("Out")
+            table.add_column("Why")
+            table.add_column("In")
+            for swap in plan.swaps:
+                table.add_row(
+                    swap.slot,
+                    swap.out_player.name,
+                    swap.out_player.status.value,
+                    swap.in_player.name,
+                )
+            console.print(table)
+
+        for warning in plan.warnings:
+            any_problem = True
+            console.print(f"  [yellow]{warning.kind}[/yellow] {warning.detail}")
+
+        if plan.clean:
+            console.print("  [green]Lineup is clean.[/green]")
+            continue
+
+        # Record the intent even when we cannot act on it, so the dashboard and
+        # the audit trail show the guardian did look.
+        with session_scope() as session:
+            gate = ActionGate()
+            for swap in plan.swaps:
+                gate.propose(
+                    session,
+                    Proposal(
+                        kind=ActionKind.LINEUP_SWAP,
+                        idempotency_key=(
+                            f"lineup:{key}:{roster.week}:{swap.slot_index}:"
+                            f"{swap.out_player.player_id}->{swap.in_player.player_id}"
+                        ),
+                        payload={
+                            "slot": swap.slot,
+                            "out": swap.out_player.name,
+                            "out_id": swap.out_player.player_id,
+                            "in": swap.in_player.name,
+                            "in_id": swap.in_player.player_id,
+                        },
+                        rationale=swap.reason,
+                        league_key=key,
+                        season=lg.season,
+                        week=roster.week,
+                    ),
+                )
+
+        if submit:
+            console.print(
+                "[yellow]No write connector exists for this platform yet — lineup "
+                "submission lands with the Sleeper/Yahoo write path in Stage 4. The "
+                "swaps above are recorded and were not sent.[/yellow]"
+            )
+
+    if any_problem:
+        raise typer.Exit(code=1)   # non-zero so a cron wrapper can alert on it
 
 
 @app.command()

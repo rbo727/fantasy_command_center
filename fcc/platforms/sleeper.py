@@ -158,6 +158,9 @@ class SleeperClient:
             player_id=str(player_id),
             name=name,
             position=raw.get("position"),
+            # Sleeper reports every slot a player qualifies for here; without it
+            # a dual-eligible RB/WR looks ineligible for half the flex slots.
+            positions=raw.get("fantasy_positions") or [],
             team=raw.get("team"),
             status=normalize_status(raw.get("injury_status")),
             status_detail=raw.get("injury_status") or "",

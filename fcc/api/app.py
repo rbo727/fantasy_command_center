@@ -157,6 +157,44 @@ def roster(key: str, week: int | None = None) -> dict:
     }
 
 
+@app.get("/api/leagues/{key}/lineup")
+def lineup(key: str, week: int | None = None) -> dict:
+    """What the guardian would change, and what it refuses to decide alone."""
+    from fcc.engines.lineup import plan_lineup
+
+    settings = get_settings()
+    try:
+        league = settings.league(key)
+    except KeyError as exc:
+        raise HTTPException(404, f"No league configured with key {key!r}") from exc
+
+    try:
+        data = connector_for(league).roster(week=week)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"{type(exc).__name__}: {exc}") from exc
+
+    plan = plan_lineup(data, week=week)
+    return {
+        "league_key": key,
+        "week": data.week,
+        "clean": plan.clean,
+        "swaps": [
+            {
+                "slot": s.slot,
+                "out": s.out_player.name,
+                "out_status": s.out_player.status.value,
+                "in": s.in_player.name,
+                "reason": s.reason,
+            }
+            for s in plan.swaps
+        ],
+        "warnings": [
+            {"kind": w.kind, "detail": w.detail, "slot": w.slot, "player": w.player}
+            for w in plan.warnings
+        ],
+    }
+
+
 @app.get("/api/actions")
 def actions(status: str | None = None, limit: int = 100) -> list[dict]:
     with session_scope() as session:

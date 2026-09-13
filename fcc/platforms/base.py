@@ -126,14 +126,25 @@ class Player:
     bye_week: int | None = None
     projected_points: float | None = None
 
+    #: Every position this player is eligible at. A dual-eligible RB/WR can
+    #: fill slots a single `position` string would rule out, so the lineup
+    #: guardian needs the full set rather than the primary label.
+    positions: list[str] = field(default_factory=list)
+
     def __post_init__(self) -> None:
         # Normalize on construction so no connector can leak a raw abbreviation.
         if self.team:
             self.team = normalize_team(self.team) or self.team
+        self.positions = [p.upper() for p in self.positions if p]
+        if not self.positions and self.position:
+            self.positions = [self.position.upper()]
 
     @property
     def available(self) -> bool:
         return not self.status.is_unavailable
+
+    def eligible_at(self, allowed: set[str]) -> bool:
+        return any(p in allowed for p in self.positions)
 
 
 @dataclass

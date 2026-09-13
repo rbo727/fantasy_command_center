@@ -174,3 +174,60 @@ def test_action_payload_and_rationale_reach_the_client(client):
     action = client.get("/api/actions/pending").json()[0]
     assert action["payload"] == {"player": "Bench Guy", "bid": 41}
     assert action["rationale"] == "waiver target"
+
+
+# --- lineup guardian -------------------------------------------------------
+def test_lineup_endpoint_reports_swaps_and_warnings(client, monkeypatch):
+    from fcc.platforms.base import Player, PlayerStatus, Roster, RosterSlot
+
+    def fake_connector(_league, store=None):
+        class C:
+            def roster(self, week=None):
+                return Roster(
+                    league_key="sleeper_main",
+                    team_id="1",
+                    week=5,
+                    slots=[
+                        RosterSlot(
+                            "RB",
+                            Player("o", "Hurt RB", position="RB", status=PlayerStatus.OUT),
+                            starter=True,
+                        ),
+                        RosterSlot(
+                            "WR",
+                            Player(
+                                "q", "Maybe WR", position="WR", status=PlayerStatus.QUESTIONABLE
+                            ),
+                            starter=True,
+                        ),
+                        RosterSlot("BN", Player("b", "Fine RB", position="RB")),
+                    ],
+                )
+
+        return C()
+
+    monkeypatch.setattr(
+        "fcc.core.config.Settings.league",
+        lambda self, key: LeagueConfig(
+            key=key, platform="sleeper", league_id="L1", season=2026
+        ),
+    )
+    monkeypatch.setattr("fcc.api.app.connector_for", fake_connector)
+
+    body = client.get("/api/leagues/sleeper_main/lineup").json()
+    assert body["clean"] is False
+    assert body["swaps"] == [
+        {
+            "slot": "RB",
+            "out": "Hurt RB",
+            "out_status": "out",
+            "in": "Fine RB",
+            "reason": "Hurt RB is out",
+        }
+    ]
+    # Questionable is surfaced as a warning, never swapped.
+    assert [w["kind"] for w in body["warnings"]] == ["questionable"]
+
+
+def test_lineup_endpoint_404s_for_an_unknown_league(client):
+    assert client.get("/api/leagues/nope/lineup").status_code == 404
