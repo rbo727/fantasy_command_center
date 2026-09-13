@@ -30,6 +30,7 @@ from fcc.platforms.registry import connector_for, load_summaries
 
 log = logging.getLogger(__name__)
 
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     init_db()
