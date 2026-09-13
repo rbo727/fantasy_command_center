@@ -27,7 +27,11 @@ class LeagueConfig(BaseModel):
     season: int
     enabled: bool = True
 
-    #: Platform-native id of *your* team/entry within the league.
+    #: Which entry in the league is yours. Each platform answers that
+    #: differently, so this field is generic on purpose:
+    #:   sleeper -> your USER id (rosters are matched by owner_id)
+    #:   yahoo   -> the team key, e.g. "449.l.123456.t.4"
+    #:   espn    -> the numeric team id within the league
     team_id: str | None = None
 
     #: Sleeper waivers clear at 3am ET Wednesday in the user's main league;

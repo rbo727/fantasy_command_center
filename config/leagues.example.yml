@@ -21,12 +21,18 @@ leagues:
       fantasyguru_url: https://www.fantasyguru.com/nfl-bets
 
   # --- Sleeper redraft ------------------------------------------------
+  # league_id: the number in the URL - sleeper.com/leagues/<league_id>/team
+  # team_id:   your Sleeper USER id, not your username and not a team id.
+  #            Sleeper identifies your roster by its owner_id, which is the
+  #            user id. Get it with:
+  #              curl -s https://api.sleeper.app/v1/user/<your-username>
+  #            and take the "user_id" field (an 18-digit string).
   - key: sleeper_main
     platform: sleeper
     league_id: "000000000000000000"
     name: "Main Sleeper League"
     season: 2026
-    team_id: "your-sleeper-user-id"
+    team_id: "000000000000000000"
     # Waivers clear 3am Wednesday Eastern; the sniper arms just before this.
     waiver_clear_cron: "0 3 * * 3"
 
