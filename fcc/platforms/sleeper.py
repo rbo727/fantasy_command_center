@@ -108,6 +108,7 @@ class SleeperClient:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._players: dict[str, dict] | None = None
         self._league: dict | None = None
+        self._transactions_cache: list[dict] | None = None
 
     # -- transport --------------------------------------------------------
     def _get(self, path: str) -> Any:
@@ -245,6 +246,34 @@ class SleeperClient:
             faab_remaining=(budget - used) if budget is not None and used is not None else None,
             waiver_position=settings.get("waiver_position"),
         )
+
+    # -- transactions -----------------------------------------------------
+    def transactions(self, week: int) -> list[dict]:
+        """Every transaction reported for a week, including failed waiver bids.
+
+        Sleeper reports losing claims alongside the winning one, which is what
+        makes it possible to see how contested a player actually was rather
+        than only what the winner paid.
+        """
+        return self._get(f"league/{self.league_id}/transactions/{week}") or []
+
+    def transaction_history(self, through_week: int | None = None) -> list[dict]:
+        """Transactions for every week so far this season.
+
+        One request per week is unavoidable — Sleeper has no bulk endpoint —
+        so results are cached on the instance for the life of the client.
+        """
+        last = through_week or self.current_week() or 1
+        if self._transactions_cache is not None:
+            return self._transactions_cache
+        out: list[dict] = []
+        for week in range(1, last + 1):
+            try:
+                out.extend(self.transactions(week))
+            except Exception as exc:  # noqa: BLE001 - a missing week is not fatal
+                log.warning("could not read week %s transactions: %s", week, exc)
+        self._transactions_cache = out
+        return out
 
     def matchup(self, week: int | None = None) -> Matchup | None:
         week = week or self.current_week()

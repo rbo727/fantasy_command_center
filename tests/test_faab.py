@@ -197,3 +197,15 @@ def test_a_realistic_recommendation_is_explainable():
     for expected in ("over replacement", "need", "league market", "weeks left"):
         assert expected in rec.rationale
     assert rec.factors["market_sample_size"] == 6
+
+
+def test_an_omitted_market_is_distinguished_from_an_empty_one():
+    """'We didn't look here' and 'we looked and found nothing' must differ."""
+    omitted = recommend_bid(5.0, ctx(), None)
+    empty = recommend_bid(5.0, ctx(), MarketHistory([]))
+
+    assert "priced separately" in omitted.rationale
+    assert "no league calibration" not in omitted.rationale
+    assert "no league calibration" in empty.rationale
+    # And an intentional omission must not be scored as missing evidence.
+    assert omitted.confidence > empty.confidence

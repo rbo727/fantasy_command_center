@@ -22,9 +22,11 @@ app = typer.Typer(add_completion=False, help="Fantasy Command Center")
 secrets_app = typer.Typer(help="Manage encrypted credentials")
 pickem_app = typer.Typer(help="ESPN pick'em automation")
 lineup_app = typer.Typer(help="Lineup guardian")
+faab_app = typer.Typer(help="FAAB bidding")
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(pickem_app, name="pickem")
 app.add_typer(lineup_app, name="lineup")
+app.add_typer(faab_app, name="faab")
 
 console = Console()
 
@@ -464,6 +466,209 @@ def pickem_run(
                 console.print(f"[red]{action.error}[/red]")
             if settings.dry_run:
                 console.print("[yellow]FCC_DRY_RUN is on — nothing was sent.[/yellow]")
+
+
+# --------------------------------------------------------------------------
+# FAAB
+# --------------------------------------------------------------------------
+def _sleeper_for(league_key: str):
+    from fcc.platforms.registry import connector_for
+
+    settings = get_settings()
+    lg = settings.league(league_key)
+    if lg.platform != "sleeper":
+        raise typer.BadParameter(
+            f"{league_key} is a {lg.platform} league; FAAB history is only wired "
+            "up for Sleeper so far."
+        )
+    return connector_for(lg), lg
+
+
+def _find_player(client, name: str) -> dict:
+    """Resolve a player name to one index entry, or refuse.
+
+    Refuses on an ambiguous name rather than picking the first match - bidding
+    on the wrong player is an expensive way to find out.
+    """
+    needle = name.strip().lower()
+    index = client.players()
+    matches = [
+        (pid, raw) for pid, raw in index.items()
+        if (raw.get("full_name") or "").lower() == needle
+    ]
+    if not matches:
+        matches = [
+            (pid, raw) for pid, raw in index.items()
+            if needle in (raw.get("full_name") or "").lower()
+        ]
+    rostered = [(pid, raw) for pid, raw in matches if raw.get("team")]
+    if rostered:
+        matches = rostered
+
+    if not matches:
+        raise typer.BadParameter(f"No player matching {name!r} in the Sleeper index.")
+    if len(matches) > 1:
+        listing = ", ".join(
+            f"{r.get('full_name')} ({r.get('position')}, {r.get('team')})"
+            for _, r in matches[:8]
+        )
+        raise typer.BadParameter(f"{name!r} is ambiguous: {listing}. Be more specific.")
+    pid, raw = matches[0]
+    return {"id": pid, **raw}
+
+
+def _money(value) -> str:
+    return f"${value:.0f}" if value is not None else "-"
+
+
+def _render_market(market) -> None:
+    s = market.summary()
+    table = Table(title=f"League bid market - {s['segment']}")
+    table.add_column("Measure")
+    table.add_column("Value", justify="right")
+    table.add_row("Claims seen", str(s["claims"]))
+    table.add_row("Won by someone", str(s["resolved"]))
+    table.add_row("Median winning bid", _money(s["median_winning_bid"]))
+    table.add_row("Biggest winning bid", _money(s["max_winning_bid"]))
+    table.add_row("Median runner-up", _money(s["median_runner_up"]))
+    table.add_row(
+        "Claims with >1 bidder",
+        f"{s['contest_rate']:.0%}" if s["contest_rate"] is not None else "-",
+    )
+    table.add_row(
+        "Winner's premium over field",
+        f"{s['median_overpay']:.0%}" if s["median_overpay"] is not None else "-",
+    )
+    console.print(table)
+    if not s["usable"]:
+        console.print(
+            "[yellow]Thin history - treat the ladder below as indicative only.[/yellow]"
+        )
+
+
+@faab_app.command("market")
+def faab_market(
+    league: str = typer.Argument(..., help="League key from config/leagues.yml"),
+    position: str = typer.Option(None, help="Narrow to one position, e.g. TE"),
+) -> None:
+    """Show what winning a waiver has actually cost in this league."""
+    from fcc.engines.market import BidMarket, parse_claims
+
+    client, _lg = _sleeper_for(league)
+    with client:
+        claims = parse_claims(client.transaction_history(), client.players())
+        market = BidMarket(claims=claims)
+        if position:
+            market = market.comparable(position)
+        _render_market(market)
+
+        contested = sorted(
+            (c for c in market.claims if c.contested and c.winning_bid is not None),
+            key=lambda c: c.winning_bid,
+            reverse=True,
+        )[:10]
+        if contested:
+            t = Table(title="Most expensive contested claims")
+            for col in ("Week", "Player", "Pos"):
+                t.add_column(col)
+            t.add_column("Won", justify="right")
+            t.add_column("Runner-up", justify="right")
+            for c in contested:
+                t.add_row(
+                    str(c.week or "?"), c.player_name, c.position or "",
+                    f"${c.winning_bid}", f"${c.runner_up}",
+                )
+            console.print(t)
+
+
+@faab_app.command("bid")
+def faab_bid(
+    league: str = typer.Argument(..., help="League key from config/leagues.yml"),
+    player: str = typer.Option(..., "--player", help="Player you want to add"),
+    need: str = typer.Option(
+        "depth",
+        help="replacing_injured_starter | starter_upgrade | depth | speculative",
+    ),
+    vor: float = typer.Option(
+        None,
+        help="Projected points per week above a freely-available replacement. "
+        "Optional; without it you get the market answer only.",
+    ),
+    weeks_remaining: int = typer.Option(None, help="Defaults to 18 minus the current week"),
+) -> None:
+    """What would it take to win this player, based on your league's own bids."""
+    from fcc.engines.faab import BidContext, recommend_bid
+    from fcc.engines.market import BidMarket, parse_claims
+
+    client, _lg = _sleeper_for(league)
+    with client:
+        target = _find_player(client, player)
+        budget_total = (client.league().get("settings") or {}).get("waiver_budget") or 0
+        summary = client.league_summary()
+        remaining = (
+            summary.faab_remaining if summary.faab_remaining is not None else budget_total
+        )
+        week = client.current_week() or 1
+        weeks_left = weeks_remaining if weeks_remaining is not None else max(1, 18 - week)
+
+        console.print(
+            "\n[bold]{}[/bold] ({}, {}) - week {}, ${} of ${} FAAB left, "
+            "{} weeks remaining\n".format(
+                target.get("full_name"), target.get("position"),
+                target.get("team") or "FA", week, remaining, budget_total, weeks_left,
+            )
+        )
+
+        claims = parse_claims(client.transaction_history(), client.players())
+        market = BidMarket(claims=claims).comparable(target.get("position"))
+        _render_market(market)
+
+        ladder = Table(title="What this league's history says it takes")
+        ladder.add_column("If you bid", justify="right")
+        ladder.add_column("Would have won", justify="right")
+        ladder.add_column("Of budget left", justify="right")
+        shown = False
+        for prob in (0.5, 0.65, 0.8, 0.9, 1.0):
+            price = market.price_for_win_probability(prob, budget_total)
+            if price is None:
+                continue
+            shown = True
+            over = "  [red](over budget)[/red]" if price > remaining else ""
+            ladder.add_row(
+                f"${price}{over}",
+                f"{prob:.0%} of comparable claims",
+                f"{price / remaining:.0%}" if remaining else "-",
+            )
+        if shown:
+            console.print(ladder)
+        else:
+            console.print("[yellow]No resolved claims yet - no market to read.[/yellow]")
+
+        if vor is not None:
+            rec = recommend_bid(
+                vor, BidContext(budget_total, remaining, weeks_left, need=need), None
+            )
+            if rec:
+                console.print(
+                    f"\n[bold]Value ceiling:[/bold] {rec.describe()} - what he is worth "
+                    "to this roster, independent of what winning costs."
+                )
+                console.print(f"[dim]{rec.rationale}[/dim]")
+                console.print(
+                    "\n[cyan]Bid where the two agree. If the market price exceeds the "
+                    "value ceiling, he is going for more than he is worth to you - that "
+                    "is a pass, not a stretch.[/cyan]"
+                )
+        else:
+            console.print(
+                "\n[dim]Pass --vor to also get the value ceiling (what he is worth to "
+                "you, as opposed to what winning costs).[/dim]"
+            )
+
+        console.print(
+            "\n[yellow]FAAB is money tier: nothing here is submitted. "
+            "This is advice for you to act on.[/yellow]"
+        )
 
 
 # --------------------------------------------------------------------------

@@ -203,6 +203,10 @@ def recommend_bid(
             factors={"budget_remaining": 0},
         )
 
+    # None means "the caller is handling the market separately" (the CLI shows
+    # it as its own table); an empty MarketHistory means "we looked and there
+    # was nothing". Those must not produce the same rationale.
+    market_omitted = market is None
     market = market or MarketHistory()
     base = baseline_fraction(vor_per_week)
     need_multiplier = NEED_MULTIPLIERS[context.need]
@@ -228,7 +232,7 @@ def recommend_bid(
     high = max(low, round(min(target * 1.35, ceiling)))
     target_int = max(1, min(round(target), high))
 
-    confidence = 0.75 if market.usable else 0.45
+    confidence = 0.75 if (market.usable or market_omitted) else 0.45
     if vor_per_week <= 0:
         confidence = min(confidence, 0.3)
 
@@ -243,6 +247,8 @@ def recommend_bid(
             f"{statistics.median(market.winning_fractions):.0%} of budget "
             f"across {market.sample_size} claims)"
         )
+    elif market_omitted:
+        bits.append("value only - market priced separately")
     else:
         bits.append(
             f"no league calibration ({market.sample_size} prior bids, "
