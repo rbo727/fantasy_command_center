@@ -189,6 +189,11 @@ Three tabs:
   any write that failed or came back unverified. This is the tab that matters.
 - **Leagues** — record, week, FAAB remaining, waiver position, and the roster
   with injury status per slot. Unavailable starters are highlighted.
+- **Waivers** — what winning a waiver has actually cost in your league, from its
+  own transaction log: median winning bid, median runner-up, how often claims are
+  contested, and a price ladder ("$31 would have won 80% of comparable claims").
+  Filterable by position. For a league with `format: guillotine`, it also shows
+  every surviving team's remaining FAAB and the price that wins outright.
 - **Action log** — every mutation the app has proposed or made.
 
 A league that can't be read shows its error on its own card; the rest of the

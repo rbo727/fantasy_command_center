@@ -231,3 +231,102 @@ def test_lineup_endpoint_reports_swaps_and_warnings(client, monkeypatch):
 
 def test_lineup_endpoint_404s_for_an_unknown_league(client):
     assert client.get("/api/leagues/nope/lineup").status_code == 404
+
+
+# --- FAAB / waivers --------------------------------------------------------
+def _stub_sleeper_for_faab():
+    from fcc.platforms.base import LeagueSummary
+
+    TX = []
+    for pid, bids in {
+        "te_a": [(4, "complete"), (2, "failed")],
+        "te_b": [(16, "complete"), (14, "failed")],
+        "te_c": [(9, "complete")],
+        "te_d": [(31, "complete"), (12, "failed")],
+    }.items():
+        for bid, status in bids:
+            TX.append({
+                "type": "waiver", "status": status, "leg": 2,
+                "adds": {pid: 1}, "settings": {"waiver_bid": bid},
+            })
+
+    class C:
+        def league(self):
+            return {"settings": {"waiver_budget": 1000}}
+
+        def league_summary(self):
+            return LeagueSummary(key="g", platform="sleeper", faab_remaining=640, week=3)
+
+        def transaction_history(self, through_week=None):
+            return TX
+
+        def players(self):
+            return {f"te_{x}": {"full_name": f"TE {x}", "position": "TE"} for x in "abcd"}
+
+        def league_budgets(self):
+            return [
+                {"roster_id": 1, "is_me": True, "budget_remaining": 640,
+                 "likely_chopped": False, "team_name": "Me"},
+                {"roster_id": 2, "is_me": False, "budget_remaining": 420,
+                 "likely_chopped": False, "team_name": "Rival"},
+                {"roster_id": 3, "is_me": False, "budget_remaining": 990,
+                 "likely_chopped": True, "team_name": "Chopped"},
+            ]
+
+    return C()
+
+
+def _faab_league(monkeypatch, fmt="guillotine"):
+    monkeypatch.setattr(
+        "fcc.core.config.Settings.league",
+        lambda self, key: LeagueConfig(
+            key=key, platform="sleeper", league_id="L1", season=2026, format=fmt
+        ),
+    )
+    monkeypatch.setattr(
+        "fcc.api.app.connector_for", lambda lg, store=None: _stub_sleeper_for_faab()
+    )
+
+
+def test_faab_endpoint_returns_market_and_ladder(client, monkeypatch):
+    _faab_league(monkeypatch, fmt="redraft")
+    body = client.get("/api/leagues/sleeper_main/faab").json()
+    assert body["budget"] == {"total": 1000, "remaining": 640}
+    assert body["market"]["resolved"] == 4
+    assert [row["probability"] for row in body["ladder"]][0] == 0.5
+    assert body["top_claims"][0]["winning_bid"] == 31
+    # No guillotine block for a redraft league - its advice would be wrong there.
+    assert body["guillotine"] is None
+
+
+def test_faab_endpoint_adds_guillotine_state_for_that_format(client, monkeypatch):
+    _faab_league(monkeypatch)
+    g = client.get("/api/leagues/sleeper_main/faab").json()["guillotine"]
+    # The chopped team's $990 must not count against you.
+    assert g["max_rival_budget"] == 420
+    assert g["can_outbid_anyone"] is True
+    assert g["price_to_guarantee"] == 421
+    assert g["teams_alive"] == 2
+    assert any("wins any player outright" in line for line in g["advice"])
+
+
+def test_faab_endpoint_can_segment_by_position(client, monkeypatch):
+    _faab_league(monkeypatch)
+    body = client.get("/api/leagues/sleeper_main/faab", params={"position": "TE"}).json()
+    assert "TE" in body["market"]["segment"]
+
+
+def test_faab_endpoint_rejects_a_non_sleeper_league(client, monkeypatch):
+    monkeypatch.setattr(
+        "fcc.core.config.Settings.league",
+        lambda self, key: LeagueConfig(
+            key=key, platform="yahoo", league_id="449.l.1", season=2026
+        ),
+    )
+    resp = client.get("/api/leagues/yahoo_main/faab")
+    assert resp.status_code == 400
+    assert "Sleeper-only" in resp.json()["detail"]
+
+
+def test_faab_endpoint_404s_for_unknown_league(client):
+    assert client.get("/api/leagues/nope/faab").status_code == 404

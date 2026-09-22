@@ -21,6 +21,11 @@ export const api = {
   overview: () => request('/api/overview'),
   leagues: () => request('/api/leagues'),
   roster: (key) => request(`/api/leagues/${encodeURIComponent(key)}/roster`),
+  faab: (key, position) =>
+    request(
+      `/api/leagues/${encodeURIComponent(key)}/faab` +
+        (position ? `?position=${encodeURIComponent(position)}` : '')
+    ),
   actions: () => request('/api/actions?limit=100'),
   approve: (id) => request(`/api/actions/${id}/approve`, { method: 'POST' }),
   reject: (id, reason) =>

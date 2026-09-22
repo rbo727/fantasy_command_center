@@ -3,11 +3,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
 import { OverviewTab } from './components/OverviewTab'
 import { LeaguesTab } from './components/LeaguesTab'
+import { WaiversTab } from './components/WaiversTab'
 import { ActionsTab } from './components/ActionsTab'
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'leagues', label: 'Leagues' },
+  { id: 'waivers', label: 'Waivers' },
   { id: 'actions', label: 'Action log' },
 ]
 
@@ -97,6 +99,7 @@ export default function App() {
           <div className="empty">Loading…</div>
         ))}
       {tab === 'leagues' && <LeaguesTab leagues={data?.leagues} />}
+      {tab === 'waivers' && <WaiversTab leagues={data?.leagues} />}
       {tab === 'actions' &&
         (actions.isLoading ? (
           <div className="empty">Loading…</div>

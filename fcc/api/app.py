@@ -195,6 +195,100 @@ def lineup(key: str, week: int | None = None) -> dict:
     }
 
 
+@app.get("/api/leagues/{key}/faab")
+def faab(key: str, position: str | None = None) -> dict:
+    """The waiver market: what winning has cost, and who can still outbid you.
+
+    Everything `fcc faab` prints, as JSON. The guillotine block is present only
+    for leagues declared that format, since its advice is wrong elsewhere.
+    """
+    from fcc.engines.guillotine import from_budget_rows
+    from fcc.engines.market import BidMarket, parse_claims
+
+    settings = get_settings()
+    try:
+        league = settings.league(key)
+    except KeyError as exc:
+        raise HTTPException(404, f"No league configured with key {key!r}") from exc
+    if league.platform != "sleeper":
+        raise HTTPException(
+            400, f"{key} is a {league.platform} league; FAAB history is Sleeper-only so far."
+        )
+
+    try:
+        client = connector_for(league)
+        budget_total = (client.league().get("settings") or {}).get("waiver_budget") or 0
+        summary = client.league_summary()
+        claims = parse_claims(client.transaction_history(), client.players())
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"{type(exc).__name__}: {exc}") from exc
+
+    remaining = summary.faab_remaining if summary.faab_remaining is not None else budget_total
+    market = BidMarket(claims=claims)
+    market = market.comparable(position) if position else market
+
+    ladder = []
+    for prob in (0.5, 0.65, 0.8, 0.9, 1.0):
+        price = market.price_for_win_probability(prob, budget_total)
+        if price is not None:
+            ladder.append(
+                {
+                    "probability": prob,
+                    "price": price,
+                    "over_budget": price > (remaining or 0),
+                    "share_of_remaining": (price / remaining) if remaining else None,
+                }
+            )
+
+    payload: dict[str, Any] = {
+        "league_key": key,
+        "format": league.format,
+        "week": summary.week,
+        "budget": {"total": budget_total, "remaining": remaining},
+        "market": market.summary(),
+        "ladder": ladder,
+        "top_claims": [
+            {
+                "week": c.week,
+                "player": c.player_name,
+                "position": c.position,
+                "winning_bid": c.winning_bid,
+                "runner_up": c.runner_up,
+                "bidders": c.bidder_count,
+            }
+            for c in sorted(
+                (c for c in market.claims if c.winning_bid is not None),
+                key=lambda c: c.winning_bid,
+                reverse=True,
+            )[:12]
+        ],
+        "guillotine": None,
+    }
+
+    if league.format == "guillotine":
+        try:
+            rows = client.league_budgets()
+            state = from_budget_rows(rows, week=summary.week)
+            payload["guillotine"] = {
+                "teams_alive": state.teams_alive,
+                "my_remaining": state.my_remaining,
+                "max_rival_budget": state.max_rival_budget,
+                "can_outbid_anyone": state.can_outbid_anyone,
+                "price_to_guarantee": state.price_to_guarantee,
+                "my_share": state.my_share,
+                "spend_cap": state.spend_cap(),
+                "advice": state.advice(),
+                "rosters": sorted(
+                    rows, key=lambda r: (r.get("budget_remaining") or 0), reverse=True
+                ),
+            }
+        except Exception as exc:  # noqa: BLE001 - advisory, never fatal
+            log.warning("guillotine state unavailable for %s: %s", key, exc)
+            payload["guillotine"] = {"error": f"{type(exc).__name__}: {exc}"}
+
+    return payload
+
+
 @app.get("/api/actions")
 def actions(status: str | None = None, limit: int = 100) -> list[dict]:
     with session_scope() as session:
