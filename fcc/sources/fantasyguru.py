@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from fcc.core.config import get_settings
 from fcc.core.secrets import Keys, SecretStore
 from fcc.engines.pickem import StaffPick
+from fcc.engines.value import RankedPlayer
 from fcc.sources.html_text import html_to_text
 
 log = logging.getLogger(__name__)
@@ -157,6 +158,110 @@ def extract_staff_picks(
     ]
     log.info("extracted %d staff picks (notes: %s)", len(picks), parsed.notes or "none")
     return picks, parsed.notes
+
+
+class ExtractedRanking(BaseModel):
+    """One player from a rankings or projections page."""
+
+    player: str = Field(description="Player name exactly as written on the page")
+    position: str = Field(description="QB, RB, WR, TE, K or DEF")
+    projected_points: float | None = Field(
+        default=None,
+        description=(
+            "Projected fantasy points PER GAME for the period the page covers. "
+            "If the page shows a season or rest-of-season total, divide by the "
+            "games remaining and say so in notes. Null if the page shows no "
+            "points at all."
+        ),
+    )
+    positional_rank: int | None = Field(
+        default=None, description="Rank within the position, 1 = best. Null if absent."
+    )
+    overall_rank: int | None = Field(default=None, description="Overall rank if shown.")
+    tier: int | None = Field(default=None, description="Tier number if the page uses tiers.")
+
+
+class ExtractedRankings(BaseModel):
+    scope: Literal["rest_of_season", "weekly", "season_total", "unknown"] = Field(
+        description="What period these rankings cover."
+    )
+    players: list[ExtractedRanking] = Field(default_factory=list)
+    notes: str = Field(
+        default="",
+        description=(
+            "Anything a human should check: whether points were per-game or "
+            "converted from a total, scoring format, or an unreadable page."
+        ),
+    )
+
+
+RANKINGS_SYSTEM = """\
+You extract fantasy football player rankings and projections from an analysis page.
+
+Rules:
+- Extract every ranked player you can see, not just the top few.
+- `projected_points` must be PER GAME. If the page gives a rest-of-season or
+  season total, divide by the number of games it covers and note that you did.
+  A total silently treated as a per-game figure would inflate every downstream
+  valuation by an order of magnitude.
+- Use the position labels as the page gives them, normalised to QB/RB/WR/TE/K/DEF.
+- If the page shows ranks but no projected points, leave projected_points null.
+  Do not invent points from a rank.
+- If this looks like a login wall, a paywall, or an index page rather than
+  rankings, return an empty list and say so in `notes`.
+"""
+
+
+def extract_rankings(
+    html: str,
+    client=None,
+    model: str | None = None,
+) -> tuple[list[RankedPlayer], str, str]:
+    """Structure a rankings page into ranked players.
+
+    Returns ``(players, scope, notes)``. Like the staff-pick extractor this
+    takes HTML and never touches the network, so a page-layout change can be
+    diagnosed from a saved file without logging in.
+    """
+    settings = get_settings()
+    if client is None:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=SecretStore().get(Keys.ANTHROPIC_API_KEY) or None)
+
+    text = html_to_text(html)
+    if not text.strip():
+        raise FantasyGuruError("Page contained no readable text after HTML stripping.")
+
+    response = client.messages.parse(
+        model=model or settings.anthropic_model,
+        max_tokens=16000,
+        system=RANKINGS_SYSTEM,
+        messages=[
+            {
+                "role": "user",
+                "content": f"Extract every ranked player from this page."
+                f"\n\n<page>\n{text}\n</page>",
+            }
+        ],
+        output_format=ExtractedRankings,
+    )
+    parsed: ExtractedRankings = response.parsed_output
+    players = [
+        RankedPlayer(
+            name=p.player,
+            position=(p.position or "").upper(),
+            projected_points=p.projected_points,
+            positional_rank=p.positional_rank,
+            overall_rank=p.overall_rank,
+        )
+        for p in parsed.players
+    ]
+    log.info(
+        "extracted %d ranked players (scope=%s, notes: %s)",
+        len(players), parsed.scope, parsed.notes or "none",
+    )
+    return players, parsed.scope, parsed.notes
 
 
 # --------------------------------------------------------------------------
