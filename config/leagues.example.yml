@@ -33,6 +33,10 @@ leagues:
     name: "Main Sleeper League"
     season: 2026
     team_id: "000000000000000000"
+    # redraft | guillotine | dynasty | bestball.
+    # `guillotine` changes how FAAB is priced: budget never replenishes, the
+    # field shrinks weekly, and `fcc faab bid` reports who can still outbid you.
+    format: redraft
     # Waivers clear 3am Wednesday Eastern; the sniper arms just before this.
     waiver_clear_cron: "0 3 * * 3"
 

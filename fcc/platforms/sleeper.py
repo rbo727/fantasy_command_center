@@ -247,6 +247,49 @@ class SleeperClient:
             waiver_position=settings.get("waiver_position"),
         )
 
+    # -- league-wide budget state -----------------------------------------
+    def league_budgets(self) -> list[dict]:
+        """Every roster's remaining FAAB, and whether it still has a team.
+
+        In a guillotine league this is the single most decision-relevant fact
+        available: if you hold more FAAB than everyone else combined, nobody
+        can outbid you and the only question left is what the player is worth.
+
+        A chopped roster is inferred from having no players, because Sleeper
+        exposes no "eliminated" flag. That is an inference, not a fact the API
+        states, and callers should present it as such.
+        """
+        budget = (self.league().get("settings") or {}).get("waiver_budget")
+        rosters = self._get(f"league/{self.league_id}/rosters") or []
+        owners = {}
+        for user in self._get(f"league/{self.league_id}/users") or []:
+            meta = user.get("metadata") or {}
+            owners[str(user.get("user_id"))] = (
+                meta.get("team_name") or user.get("display_name") or ""
+            )
+
+        out: list[dict] = []
+        for roster in rosters:
+            settings = roster.get("settings") or {}
+            used = settings.get("waiver_budget_used")
+            players = roster.get("players") or []
+            out.append(
+                {
+                    "roster_id": roster.get("roster_id"),
+                    "owner_id": roster.get("owner_id"),
+                    "team_name": owners.get(str(roster.get("owner_id")), ""),
+                    "budget_used": used,
+                    "budget_remaining": (
+                        budget - used if budget is not None and used is not None else None
+                    ),
+                    "player_count": len(players),
+                    # Inference, not an API fact: Sleeper has no eliminated flag.
+                    "likely_chopped": len(players) == 0,
+                    "is_me": str(roster.get("owner_id")) == str(self.user_id or ""),
+                }
+            )
+        return out
+
     # -- transactions -----------------------------------------------------
     def transactions(self, week: int) -> list[dict]:
         """Every transaction reported for a week, including failed waiver bids.

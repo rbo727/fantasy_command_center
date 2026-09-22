@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Platform = Literal["yahoo", "sleeper", "espn", "espn_pickem"]
+LeagueFormat = Literal["redraft", "guillotine", "dynasty", "bestball"]
 
 
 class LeagueConfig(BaseModel):
@@ -26,6 +27,12 @@ class LeagueConfig(BaseModel):
     name: str = ""
     season: int
     enabled: bool = True
+
+    #: Changes how FAAB is priced. A guillotine league eliminates the
+    #: lowest-scoring team each week, so budget never replenishes, the field
+    #: shrinks, and a whole chopped roster hits waivers at once - advice tuned
+    #: for redraft is wrong there.
+    format: LeagueFormat = "redraft"
 
     #: Which entry in the league is yours. Each platform answers that
     #: differently, so this field is generic on purpose:

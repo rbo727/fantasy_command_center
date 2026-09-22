@@ -546,6 +546,41 @@ def _render_market(market) -> None:
         )
 
 
+def _render_guillotine(client, week: int | None) -> None:
+    """Show who can still outbid you. In a guillotine league this decides most bids."""
+    from fcc.engines.guillotine import from_budget_rows
+
+    try:
+        rows = client.league_budgets()
+        state = from_budget_rows(rows, week=week)
+    except Exception as exc:  # noqa: BLE001 - advisory; never block the bid view
+        console.print(f"[yellow]Could not read league budgets: {exc}[/yellow]")
+        return
+
+    table = Table(title="Guillotine: FAAB still live")
+    table.add_column("Team")
+    table.add_column("Left", justify="right")
+    table.add_column("", justify="left")
+    for row in sorted(
+        rows, key=lambda r: (r.get("budget_remaining") or 0), reverse=True
+    ):
+        if row.get("likely_chopped"):
+            note = "[dim]chopped (inferred: empty roster)[/dim]"
+        elif row.get("is_me"):
+            note = "[bold]you[/bold]"
+        else:
+            note = ""
+        table.add_row(
+            row.get("team_name") or str(row.get("roster_id")),
+            f"${row['budget_remaining']}" if row.get("budget_remaining") is not None else "-",
+            note,
+        )
+    console.print(table)
+    for line in state.advice():
+        console.print(f"  {line}")
+    console.print()
+
+
 @faab_app.command("market")
 def faab_market(
     league: str = typer.Argument(..., help="League key from config/leagues.yml"),
@@ -618,6 +653,9 @@ def faab_bid(
                 target.get("team") or "FA", week, remaining, budget_total, weeks_left,
             )
         )
+
+        if _lg.format == "guillotine":
+            _render_guillotine(client, week)
 
         claims = parse_claims(client.transaction_history(), client.players())
         market = BidMarket(claims=claims).comparable(target.get("position"))
