@@ -6,7 +6,6 @@ moves every week, because a shrinking field means fewer starting slots and a
 higher bar to clear.
 """
 
-import pytest
 
 from fcc.engines.value import (
     RankedPlayer,
