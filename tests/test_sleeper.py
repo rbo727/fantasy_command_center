@@ -194,6 +194,129 @@ def test_unknown_player_id_is_not_reported_as_healthy(mocked, tmp_path):
     assert player.status.is_doubtful
 
 
+# --- projections and free agents --------------------------------------------
+PROJECTIONS = [
+    {
+        "player_id": "p_rb1",
+        "player": {"first_name": "Test", "last_name": "RB1", "position": "RB", "team": "BAL"},
+        "stats": {"pts_ppr": 18.5, "pts_half_ppr": 15.0, "pts_std": 11.5},
+    },
+    {
+        "player_id": "p_bench",
+        "player": {"first_name": "Bench", "last_name": "Guy", "position": "RB", "team": "JAC"},
+        "stats": {"pts_ppr": 6.0, "pts_half_ppr": 5.0, "pts_std": 4.0},
+    },
+    {
+        "player_id": "no_position",
+        "player": {"first_name": "No", "last_name": "Position"},
+        "stats": {"pts_ppr": 1.0},
+    },
+]
+
+
+def test_projections_are_keyed_by_player_id(tmp_path):
+    with respx.mock(base_url=BASE, assert_all_called=False) as mock:
+        mock.get("/league/L1").mock(return_value=httpx.Response(200, json=LEAGUE))
+        mock.get("https://api.sleeper.app/projections/nfl/2026/5").mock(
+            return_value=httpx.Response(200, json=PROJECTIONS)
+        )
+        rows = _client(tmp_path).projections(5)
+    assert set(rows) == {"p_rb1", "p_bench", "no_position"}
+    assert rows["p_rb1"]["stats"]["pts_ppr"] == 18.5
+
+
+def test_ranked_players_uses_ppr_when_the_league_scores_receptions(tmp_path):
+    league = {**LEAGUE, "scoring_settings": {"rec": 1.0}}
+    with respx.mock(base_url=BASE, assert_all_called=False) as mock:
+        mock.get("/league/L1").mock(return_value=httpx.Response(200, json=league))
+        mock.get("/state/nfl").mock(return_value=httpx.Response(200, json={"week": 5}))
+        mock.get("https://api.sleeper.app/projections/nfl/2026/5").mock(
+            return_value=httpx.Response(200, json=PROJECTIONS)
+        )
+        ranked = _client(tmp_path).ranked_players()
+    rb1 = next(p for p in ranked if p.player_id == "p_rb1")
+    assert rb1.name == "Test RB1"
+    assert rb1.position == "RB"
+    assert rb1.projected_points == 18.5           # pts_ppr, not pts_std
+    assert rb1.team == "BAL"
+
+
+def test_ranked_players_falls_back_to_standard_scoring(tmp_path):
+    league = {**LEAGUE, "scoring_settings": {"rec": 0}}
+    with respx.mock(base_url=BASE, assert_all_called=False) as mock:
+        mock.get("/league/L1").mock(return_value=httpx.Response(200, json=league))
+        mock.get("/state/nfl").mock(return_value=httpx.Response(200, json={"week": 5}))
+        mock.get("https://api.sleeper.app/projections/nfl/2026/5").mock(
+            return_value=httpx.Response(200, json=PROJECTIONS)
+        )
+        ranked = _client(tmp_path).ranked_players()
+    rb1 = next(p for p in ranked if p.player_id == "p_rb1")
+    assert rb1.projected_points == 11.5            # pts_std
+
+
+def test_ranked_players_skips_rows_with_no_position(tmp_path):
+    with respx.mock(base_url=BASE, assert_all_called=False) as mock:
+        mock.get("/league/L1").mock(return_value=httpx.Response(200, json=LEAGUE))
+        mock.get("/state/nfl").mock(return_value=httpx.Response(200, json={"week": 5}))
+        mock.get("https://api.sleeper.app/projections/nfl/2026/5").mock(
+            return_value=httpx.Response(200, json=PROJECTIONS)
+        )
+        ranked = _client(tmp_path).ranked_players()
+    assert "no_position" not in {p.player_id for p in ranked}
+
+
+def test_rostered_player_ids_unions_every_roster(mocked, tmp_path):
+    ids = _client(tmp_path).rostered_player_ids()
+    assert set(ALL_PLAYERS) <= ids
+    assert "KC" in ids                              # a team defence counts too
+
+
+# --- authenticated waiver claims -------------------------------------------
+GRAPHQL = "https://sleeper.com/graphql"
+CLAIMS = [
+    {"status": "complete", "leg": 2, "adds": {"p_te": 1}, "drops": {"p_bench": 1},
+     "settings": {"waiver_bid": 30, "seq": 0}},
+]
+
+
+def test_waiver_claims_sends_the_token_and_my_roster_id(mocked, tmp_path):
+    route = mocked.post(GRAPHQL).mock(
+        return_value=httpx.Response(200, json={"data": {"league_transactions_filtered": CLAIMS}})
+    )
+    client = SleeperClient(league_id="123", user_id="user-me", cache_dir=tmp_path)
+    mocked.get("/league/123/rosters").mock(return_value=httpx.Response(200, json=ROSTERS))
+
+    assert client.waiver_claims("tok") == CLAIMS
+    sent = route.calls.last.request
+    assert sent.headers["authorization"] == "tok"
+    assert "roster_id_filters: [1]" in json.loads(sent.content)["query"]
+
+
+def test_an_expired_token_says_so(mocked, tmp_path):
+    mocked.post(GRAPHQL).mock(return_value=httpx.Response(401))
+    mocked.get("/league/123/rosters").mock(return_value=httpx.Response(200, json=ROSTERS))
+    client = SleeperClient(league_id="123", user_id="user-me", cache_dir=tmp_path)
+    with pytest.raises(SleeperError, match="expired"):
+        client.waiver_claims("stale")
+
+
+def test_graphql_errors_are_raised_not_read_as_an_empty_queue(mocked, tmp_path):
+    """An error body has no data - it must not look like 'nothing queued'."""
+    mocked.post(GRAPHQL).mock(
+        return_value=httpx.Response(200, json={"errors": [{"message": "nope"}]})
+    )
+    mocked.get("/league/123/rosters").mock(return_value=httpx.Response(200, json=ROSTERS))
+    client = SleeperClient(league_id="123", user_id="user-me", cache_dir=tmp_path)
+    with pytest.raises(SleeperError, match="GraphQL error"):
+        client.waiver_claims("tok")
+
+
+def test_a_non_numeric_league_id_is_never_put_in_the_query(tmp_path):
+    client = SleeperClient(league_id='1") { evil }', user_id="user-me", cache_dir=tmp_path)
+    with pytest.raises(SleeperError, match="not numeric"):
+        client.waiver_claims("tok")
+
+
 def test_missing_league_is_a_clear_error(tmp_path):
     with respx.mock(base_url=BASE, assert_all_called=False) as mock:
         mock.get("/league/NOPE").mock(return_value=httpx.Response(404))

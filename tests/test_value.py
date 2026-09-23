@@ -12,6 +12,7 @@ from fcc.engines.value import (
     find,
     replacement_points,
     replacement_rank,
+    top_free_agents_by_position,
     upgrade_over,
     value_over_replacement,
 )
@@ -124,3 +125,43 @@ def test_find_refuses_an_ambiguous_partial():
 
 def test_find_returns_none_for_a_miss():
     assert find(pool("RB", 10), "Nobody") is None
+
+
+# --- free agent board -------------------------------------------------------
+def test_rostered_players_are_excluded():
+    players = [
+        RankedPlayer(player_id="1", name="Rostered RB", position="RB", projected_points=20),
+        RankedPlayer(player_id="2", name="Free RB", position="RB", projected_points=10),
+    ]
+    board = top_free_agents_by_position(players, rostered_ids={"1"})
+    assert [p.name for p in board["RB"]] == ["Free RB"]
+
+
+def test_unprojected_players_are_left_out_not_zeroed():
+    players = [
+        RankedPlayer(player_id="1", name="Known", position="TE", projected_points=5),
+        RankedPlayer(player_id="2", name="Unknown", position="TE", projected_points=None),
+    ]
+    board = top_free_agents_by_position(players, rostered_ids=set())
+    assert [p.name for p in board["TE"]] == ["Known"]
+
+
+def test_board_is_grouped_by_position_and_sorted_best_first():
+    players = [
+        RankedPlayer(player_id="1", name="RB Low", position="RB", projected_points=5),
+        RankedPlayer(player_id="2", name="RB High", position="RB", projected_points=15),
+        RankedPlayer(player_id="3", name="WR Only", position="WR", projected_points=8),
+    ]
+    board = top_free_agents_by_position(players, rostered_ids=set())
+    assert [p.name for p in board["RB"]] == ["RB High", "RB Low"]
+    assert [p.name for p in board["WR"]] == ["WR Only"]
+
+
+def test_board_is_limited_per_position():
+    players = [
+        RankedPlayer(player_id=str(i), name=f"RB{i}", position="RB", projected_points=float(i))
+        for i in range(15)
+    ]
+    board = top_free_agents_by_position(players, rostered_ids=set(), limit=10)
+    assert len(board["RB"]) == 10
+    assert board["RB"][0].name == "RB14"     # highest projection first

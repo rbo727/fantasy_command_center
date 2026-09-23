@@ -330,3 +330,62 @@ def test_faab_endpoint_rejects_a_non_sleeper_league(client, monkeypatch):
 
 def test_faab_endpoint_404s_for_unknown_league(client):
     assert client.get("/api/leagues/nope/faab").status_code == 404
+
+
+# --- my waiver claims -------------------------------------------------------
+def _claims_league(monkeypatch, token, claims):
+    class C:
+        def waiver_claims(self, tok):
+            assert tok == token
+            return claims
+
+        def players(self):
+            return {"a": {"full_name": "Add Guy", "position": "TE", "team": "LV"},
+                    "d": {"full_name": "Drop Guy", "position": "TE", "team": "PHI"}}
+
+    monkeypatch.setattr(
+        "fcc.core.config.Settings.league",
+        lambda self, key: LeagueConfig(key=key, platform="sleeper", league_id="1", season=2026),
+    )
+    monkeypatch.setattr("fcc.api.app.connector_for", lambda lg, store=None: C())
+    monkeypatch.setattr("fcc.core.secrets.SecretStore.get", lambda self, name, default=None: token)
+
+
+def test_claims_without_a_token_say_so_rather_than_look_empty(client, monkeypatch):
+    _claims_league(monkeypatch, None, [])
+    body = client.get("/api/leagues/sleeper_main/waiver-claims").json()
+    assert body["configured"] is False
+
+
+def test_claims_split_pending_from_the_last_clear(client, monkeypatch):
+    claims = [
+        {"status": "complete", "leg": 2, "adds": {"a": 1}, "drops": {"d": 1},
+         "settings": {"waiver_bid": 287, "seq": 0}},
+        {"status": "failed", "leg": 2, "adds": {"a": 1}, "drops": {},
+         "settings": {"waiver_bid": 15, "seq": 1}},
+        {"status": "complete", "leg": 1, "adds": {"a": 1}, "drops": {},
+         "settings": {"waiver_bid": 50, "seq": 0}},
+        # A status never seen live: kept verbatim and treated as pending.
+        {"status": "queued_somehow", "leg": 3, "adds": {"a": 1}, "drops": {"d": 1},
+         "settings": {"waiver_bid": 40, "seq": 0}},
+    ]
+    _claims_league(monkeypatch, "tok", claims)
+    body = client.get("/api/leagues/sleeper_main/waiver-claims").json()
+
+    assert [c["status"] for c in body["pending"]] == ["queued_somehow"]
+    assert body["pending"][0]["adds"][0]["name"] == "Add Guy"
+    assert body["last_clear"]["leg"] == 2
+    assert [c["bid"] for c in body["last_clear"]["claims"]] == [287, 15]   # won first
+
+
+def test_claims_connector_failure_is_502(client, monkeypatch):
+    _claims_league(monkeypatch, "tok", [])
+
+    class Boom:
+        def waiver_claims(self, tok):
+            raise RuntimeError("token expired")
+
+    monkeypatch.setattr("fcc.api.app.connector_for", lambda lg, store=None: Boom())
+    resp = client.get("/api/leagues/sleeper_main/waiver-claims")
+    assert resp.status_code == 502
+    assert "token expired" in resp.json()["detail"]

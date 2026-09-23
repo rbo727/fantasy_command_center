@@ -44,6 +44,11 @@ class RankedPlayer:
     projected_points: float | None = None
     positional_rank: int | None = None
     overall_rank: int | None = None
+    #: Platform id, when the source is one (Sleeper) rather than free text
+    #: extracted from a page. Lets callers match a player without a name
+    #: lookup, which is the only reliable way once suffixes/spelling enter it.
+    player_id: str | None = None
+    team: str | None = None
 
     @property
     def pos(self) -> str:
@@ -124,6 +129,28 @@ def upgrade_over(
     if incumbent is None or incumbent.projected_points is None:
         return None
     return player.projected_points - incumbent.projected_points
+
+
+def top_free_agents_by_position(
+    players: list[RankedPlayer],
+    rostered_ids: set[str],
+    limit: int = 10,
+) -> dict[str, list[RankedPlayer]]:
+    """Free agents only, ranked by projection, grouped by position.
+
+    A player with no projection is left out rather than sorted to the bottom
+    as a 0 - unprojected is "unknown", not "worthless", and showing it as 0
+    would misrepresent a thin position's honest low numbers.
+    """
+    out: dict[str, list[RankedPlayer]] = {}
+    for p in players:
+        if p.player_id in rostered_ids or p.projected_points is None:
+            continue
+        out.setdefault(p.pos, []).append(p)
+    for pos, group in out.items():
+        group.sort(key=lambda p: -p.projected_points)
+        out[pos] = group[:limit]
+    return out
 
 
 def find(players: list[RankedPlayer], name: str) -> RankedPlayer | None:

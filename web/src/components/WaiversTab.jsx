@@ -166,6 +166,164 @@ function Market({ data, position, setPosition }) {
   )
 }
 
+const names = (ps) => ps.map((p) => p.name).join(', ') || '—'
+
+/**
+ * Your own queue. Pending claims are private to your account, so this needs
+ * the Sleeper token; without it, it says so instead of showing an empty queue
+ * that would look like "nothing queued".
+ */
+function PendingClaims({ leagueKey }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['waiverClaims', leagueKey],
+    queryFn: () => api.waiverClaims(leagueKey),
+    enabled: Boolean(leagueKey),
+    retry: false,
+  })
+
+  return (
+    <div className="card">
+      <div className="platform">Your queue</div>
+      <h3>Pending waiver claims</h3>
+
+      {isLoading && <div className="empty">Reading your claims…</div>}
+      {error && <div className="error">{String(error.message)}</div>}
+      {data && !data.configured && (
+        <div className="empty">
+          No Sleeper token stored — run <code>fcc secrets set sleeper_token</code> to see
+          pending claims.
+        </div>
+      )}
+
+      {data?.configured && (
+        <>
+          {data.pending.length === 0 ? (
+            <div className="empty">Nothing queued for the next clear.</div>
+          ) : (
+            <div className="table-wrap" style={{ marginTop: 10 }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Add</th>
+                    <th>Drop</th>
+                    <th style={{ textAlign: 'right' }}>Bid</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.pending.map((c, i) => (
+                    <tr key={`${c.seq}-${i}`}>
+                      <td>{c.seq ?? i + 1}</td>
+                      <td>{names(c.adds)}</td>
+                      <td>{names(c.drops)}</td>
+                      <td className="num">{money(c.bid)}</td>
+                      <td>{c.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {data.last_clear && (
+            <details style={{ marginTop: 14 }}>
+              <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                Last clear (week {data.last_clear.leg})
+              </summary>
+              <div className="table-wrap" style={{ marginTop: 10 }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Result</th>
+                      <th>Add</th>
+                      <th>Drop</th>
+                      <th style={{ textAlign: 'right' }}>Bid</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.last_clear.claims.map((c, i) => (
+                      <tr key={i} className={c.status === 'failed' ? 'problem' : ''}>
+                        <td>
+                          <StatusBadge
+                            tone={c.status === 'complete' ? 'good' : 'warning'}
+                            label={c.status === 'complete' ? 'won' : 'lost'}
+                          />
+                        </td>
+                        <td>{names(c.adds)}</td>
+                        <td>{names(c.drops)}</td>
+                        <td className="num">{money(c.bid)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * What's actually available right now, and what it's worth. `market_price` is
+ * what this league's own history says a 65%-confidence bid costs at that
+ * position; `recommend` is the value ceiling - what the player is worth to
+ * you, independent of what winning costs. A player with no `recommend` has no
+ * Sleeper projection this week, not a value of zero.
+ */
+function FreeAgents({ byPosition, position }) {
+  const positions = Object.keys(byPosition).sort()
+  if (!positions.length) return null
+  const shown = position && byPosition[position] ? [position] : positions
+
+  return (
+    <div className="card">
+      <div className="platform">Free agents, this week's projection</div>
+      <h3>What to spend right now</h3>
+
+      {shown.map((pos) => (
+        <div key={pos} style={{ marginTop: pos === shown[0] ? 10 : 20 }}>
+          {shown.length > 1 && (
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>{pos}</div>
+          )}
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Player</th>
+                  <th>Team</th>
+                  <th style={{ textAlign: 'right' }}>Proj pts</th>
+                  <th style={{ textAlign: 'right' }}>VOR</th>
+                  <th style={{ textAlign: 'right' }}>Market (65%)</th>
+                  <th style={{ textAlign: 'right' }}>Value ceiling</th>
+                </tr>
+              </thead>
+              <tbody>
+                {byPosition[pos].map((p) => (
+                  <tr key={p.player_id}>
+                    <td>{p.name}</td>
+                    <td>{p.team || ''}</td>
+                    <td className="num">{p.projected_points?.toFixed(1) ?? '—'}</td>
+                    <td className="num">{p.vor != null ? p.vor.toFixed(1) : '—'}</td>
+                    <td className="num">{money(p.market_price)}</td>
+                    <td className="num">
+                      {p.recommend
+                        ? `${money(p.recommend.low)}–${money(p.recommend.high)}`
+                        : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function WaiversTab({ leagues }) {
   const sleeper = (leagues || []).filter((l) => l.platform === 'sleeper' && !l.error)
   const [leagueKey, setLeagueKey] = useState(sleeper[0]?.key)
@@ -200,6 +358,8 @@ export function WaiversTab({ leagues }) {
         </div>
       )}
 
+      <PendingClaims leagueKey={key} />
+
       {isLoading && <div className="empty">Reading the league's transaction history…</div>}
       {error && <div className="error">{String(error.message)}</div>}
 
@@ -207,6 +367,13 @@ export function WaiversTab({ leagues }) {
         <>
           {data.format === 'guillotine' && <Guillotine g={data.guillotine} />}
           <Market data={data} position={position} setPosition={setPosition} />
+
+          {data.free_agents?.error && (
+            <div className="error">Free-agent board unavailable — {data.free_agents.error}</div>
+          )}
+          {data.free_agents?.by_position && (
+            <FreeAgents byPosition={data.free_agents.by_position} position={position} />
+          )}
 
           {data.top_claims.length > 0 && (
             <div className="card">

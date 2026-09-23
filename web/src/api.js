@@ -26,6 +26,8 @@ export const api = {
       `/api/leagues/${encodeURIComponent(key)}/faab` +
         (position ? `?position=${encodeURIComponent(position)}` : '')
     ),
+  waiverClaims: (key) =>
+    request(`/api/leagues/${encodeURIComponent(key)}/waiver-claims`),
   actions: () => request('/api/actions?limit=100'),
   approve: (id) => request(`/api/actions/${id}/approve`, { method: 'POST' }),
   reject: (id, reason) =>

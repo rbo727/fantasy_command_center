@@ -627,7 +627,8 @@ def faab_bid(
     vor: float = typer.Option(
         None,
         help="Projected points per week above a freely-available replacement. "
-        "Optional; without it you get the market answer only.",
+        "Auto-computed from Sleeper's own weekly projections when omitted; "
+        "pass this to override with your own number instead.",
     ),
     weeks_remaining: int = typer.Option(None, help="Defaults to 18 minus the current week"),
 ) -> None:
@@ -682,14 +683,28 @@ def faab_bid(
         else:
             console.print("[yellow]No resolved claims yet - no market to read.[/yellow]")
 
+        auto_vor = vor is None
+        if auto_vor:
+            from fcc.engines.value import value_over_replacement
+
+            try:
+                ranked = client.ranked_players(week)
+                total_rosters = client.league().get("total_rosters") or 0
+                found = next((r for r in ranked if r.player_id == target["id"]), None)
+                if found is not None and total_rosters:
+                    vor = value_over_replacement(found, ranked, total_rosters)
+            except Exception as exc:  # noqa: BLE001 - advisory, never blocks the bid view
+                console.print(f"[dim]Could not read Sleeper's projections: {exc}[/dim]")
+
         if vor is not None:
             rec = recommend_bid(
                 vor, BidContext(budget_total, remaining, weeks_left, need=need), None
             )
             if rec:
+                source = "Sleeper's own projection" if auto_vor else "the --vor you gave"
                 console.print(
                     f"\n[bold]Value ceiling:[/bold] {rec.describe()} - what he is worth "
-                    "to this roster, independent of what winning costs."
+                    f"to this roster ({source}), independent of what winning costs."
                 )
                 console.print(f"[dim]{rec.rationale}[/dim]")
                 console.print(
@@ -699,8 +714,8 @@ def faab_bid(
                 )
         else:
             console.print(
-                "\n[dim]Pass --vor to also get the value ceiling (what he is worth to "
-                "you, as opposed to what winning costs).[/dim]"
+                "\n[dim]No Sleeper projection found for this player this week, and no "
+                "--vor was given - no value ceiling, market answer only.[/dim]"
             )
 
         console.print(

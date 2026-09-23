@@ -39,7 +39,7 @@ credentials are on this machine. **Prefer real data over more fixtures.**
 |---|---|
 | Action gate, teams, status normalization, lineup engine, redaction, pick'em join | **Verified.** Pure logic, thoroughly tested. Trust these. |
 | FastAPI + dashboard | **Verified by running it** — server served the built UI and a real browser click moved an action to `approved` in the DB. |
-| Sleeper connector | **Partly live-verified.** The user ran it against their real league: league and team resolve correctly, so `league_id`/`team_id` and the `owner_id` roster match work. **Slot alignment, FAAB remaining and injury-status mapping are still unchecked** — see Task 1. |
+| Sleeper connector | **Live-verified.** League/team resolve, and slot alignment, FAAB remaining, and injury-status mapping all confirmed against the app (Task 1, 2026-09-14). |
 | ESPN pick'em *reads* | **Assumed.** Parsers try several field spellings because the real ones were never observed. |
 | ESPN pick'em *writes* | **Unknown.** ESPN publishes no submission endpoint. Handled by replaying a request the user captures in DevTools. |
 | FantasyGuru login + extraction | **Assumed.** Login selectors are a guess; the page was never loaded. |
@@ -173,7 +173,7 @@ until you've watched a run you believe.
 
 ## Definition of done for this handoff
 
-- [ ] Sleeper roster verified against the app, slot-by-slot
+- [x] Sleeper roster verified against the app, slot-by-slot
 - [ ] Real ESPN dump captured; parsers match the real payload; fixture committed
 - [ ] Pick'em write path captured and a preview run produces sensible picks
 - [ ] FantasyGuru extraction verified, spread signs checked by hand

@@ -57,6 +57,9 @@ class StubSleeper:
     def current_week(self):
         return 3
 
+    def ranked_players(self, week=None):
+        return []  # no Sleeper projection available for anyone in this stub
+
     def transaction_history(self, through_week=None):
         return TRANSACTIONS
 
@@ -115,16 +118,19 @@ def test_losing_bids_are_surfaced_as_the_runner_up_signal(stubbed):
     assert "Most expensive contested claims" in r.output
 
 
-def test_value_ceiling_appears_only_when_a_projection_is_given(stubbed):
+def test_value_ceiling_appears_only_when_a_projection_is_available(stubbed):
+    # The stub's ranked_players() returns nothing, so auto-VOR finds no match.
     without = run("faab", "bid", "sleeper_main", "--player", "Brock Bowers")
     assert "Value ceiling" not in without.output
-    assert "--vor" in without.output
+    assert "no --vor was given" in without.output
 
     with_vor = run(
         "faab", "bid", "sleeper_main", "--player", "Brock Bowers",
         "--vor", "5.5", "--need", "replacing_injured_starter",
     )
     assert "Value ceiling" in with_vor.output
+    # Rich wraps long lines, so match loosely rather than pin exact wrapping.
+    assert "--vor" in with_vor.output and "you gave" in with_vor.output
     assert "over replacement" in with_vor.output
 
 

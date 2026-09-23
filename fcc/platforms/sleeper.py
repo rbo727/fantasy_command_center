@@ -28,6 +28,7 @@ from typing import Any
 import httpx
 
 from fcc.core.config import get_settings
+from fcc.engines.value import RankedPlayer
 from fcc.platforms.base import (
     LeagueSummary,
     Matchup,
@@ -40,6 +41,19 @@ from fcc.platforms.base import (
 log = logging.getLogger(__name__)
 
 BASE = "https://api.sleeper.app/v1"
+#: A different host and payload shape from everything else this client reads,
+#: so it is not routed through :meth:`SleeperClient._get`.
+PROJECTIONS_BASE = "https://api.sleeper.app/projections/nfl"
+
+#: The web app's own GraphQL endpoint. Unlike everything above it needs the
+#: user's token, because it can see things the public API can't - notably
+#: waiver claims that haven't cleared yet.
+GRAPHQL_URL = "https://sleeper.com/graphql"
+
+#: Claim statuses actually observed from the live API. Anything else is
+#: reported verbatim and treated as still pending rather than guessed at -
+#: the pending spelling itself has not been seen yet.
+SETTLED_CLAIM_STATUSES = {"complete", "failed"}
 
 #: Slots that are not part of the active lineup.
 NON_STARTING_SLOTS = {"BN", "IR", "TAXI"}
@@ -289,6 +303,103 @@ class SleeperClient:
                 }
             )
         return out
+
+    # -- free agents and projections ---------------------------------------
+    def rostered_player_ids(self) -> set[str]:
+        """Every player id owned by any roster in the league, mine included."""
+        rosters = self._get(f"league/{self.league_id}/rosters") or []
+        out: set[str] = set()
+        for roster in rosters:
+            out.update(str(pid) for pid in (roster.get("players") or []))
+        return out
+
+    def projections(self, week: int) -> dict[str, dict]:
+        """Sleeper's own weekly player projections, sourced from RotoWire.
+
+        Undocumented but public - no auth, no cookie. Not disk-cached like the
+        player index: projections move through the week as injury news lands,
+        so a stale copy is actively misleading rather than merely old.
+        """
+        season = self.league().get("season")
+        resp = self._client.get(
+            f"{PROJECTIONS_BASE}/{season}/{week}", params={"season_type": "regular"}
+        )
+        resp.raise_for_status()
+        return {str(row["player_id"]): row for row in resp.json() if row.get("player_id")}
+
+    def ranked_players(self, week: int | None = None) -> list[RankedPlayer]:
+        """Every projected player this week, scored to match this league's format.
+
+        Feeds :mod:`fcc.engines.value`'s replacement-level math, which expects
+        the *whole* ranked universe at a position rather than free agents
+        only - replacement level is defined as the first player past everyone
+        already rostered, so the pool has to include the rostered players too.
+        """
+        week = week or self.current_week() or 1
+        rec = (self.league().get("scoring_settings") or {}).get("rec") or 0
+        field = "pts_ppr" if rec >= 1 else "pts_half_ppr" if rec >= 0.5 else "pts_std"
+
+        out: list[RankedPlayer] = []
+        for pid, row in self.projections(week).items():
+            player = row.get("player") or {}
+            position = player.get("position")
+            if not position:
+                continue
+            name = (
+                " ".join(filter(None, [player.get("first_name"), player.get("last_name")]))
+                or player.get("team")
+                or pid
+            )
+            stats = row.get("stats") or {}
+            out.append(
+                RankedPlayer(
+                    player_id=pid,
+                    name=name,
+                    position=position.upper(),
+                    projected_points=stats.get(field),
+                    team=player.get("team"),
+                )
+            )
+        return out
+
+    # -- authenticated reads ------------------------------------------------
+    def waiver_claims(self, token: str) -> list[dict]:
+        """Every waiver claim on my roster this season, pending ones included.
+
+        The public API only reports a claim after the Wednesday clear. This
+        uses the same GraphQL query the Sleeper web app does, captured from
+        DevTools; the token is passed in rather than read here so the rest of
+        this client stays credential-free.
+        """
+        league_id = str(self.league_id)
+        # Interpolated into the query text (that is how the web app sends it),
+        # so refuse anything that isn't plainly an id.
+        if not league_id.isdigit():
+            raise SleeperError(f"League id {league_id!r} is not numeric; refusing to query.")
+        roster_id = int(self._my_roster_raw()["roster_id"])
+
+        query = (
+            "query league_transactions_filtered { league_transactions_filtered("
+            f'league_id: "{league_id}", roster_id_filters: [{roster_id}], '
+            'type_filters: ["waiver"], leg_filters: [], status_filters: []) '
+            "{ adds drops leg settings status created status_updated transaction_id } }"
+        )
+        resp = self._client.post(
+            GRAPHQL_URL,
+            headers={"authorization": token, "content-type": "application/json"},
+            json={"operationName": "league_transactions_filtered", "variables": {},
+                  "query": query},
+        )
+        if resp.status_code in (401, 403):
+            raise SleeperError(
+                "Sleeper rejected the token - it has probably expired. Capture a "
+                "fresh one and `fcc secrets set sleeper_token`."
+            )
+        resp.raise_for_status()
+        body = resp.json()
+        if body.get("errors"):
+            raise SleeperError(f"Sleeper GraphQL error: {body['errors']}")
+        return (body.get("data") or {}).get("league_transactions_filtered") or []
 
     # -- transactions -----------------------------------------------------
     def transactions(self, week: int) -> list[dict]:
