@@ -167,6 +167,207 @@ function Market({ data, position, setPosition }) {
 }
 
 const names = (ps) => ps.map((p) => p.name).join(', ') || '—'
+const range = (r) => (r ? `${money(r.low)}–${money(r.high)}` : '—')
+
+const STATUS_TONE = { available: 'good', yours: 'good', rostered: 'neutral', unmatched: 'warning' }
+const STATUS_LABEL = {
+  available: 'available',
+  yours: 'on your team',
+  rostered: 'rostered',
+  unmatched: 'not matched',
+}
+
+const faabRange = (lo, hi, unit) =>
+  lo == null ? '—' : lo === hi ? `${unit(lo)}` : `${unit(lo)}–${unit(hi)}`
+const pctUnit = (v) => `${v}%`
+const dollarUnit = (v) => `$${v}`
+
+/** Two lines of the write-up, full text on hover. */
+function Blurb({ text }) {
+  if (!text) return null
+  return (
+    <div
+      title={text}
+      style={{
+        color: 'var(--text-muted)',
+        fontSize: 12,
+        marginTop: 2,
+        display: '-webkit-box',
+        WebkitLineClamp: 2,
+        WebkitBoxOrient: 'vertical',
+        overflow: 'hidden',
+        whiteSpace: 'normal',
+      }}
+    >
+      {text}
+    </div>
+  )
+}
+
+function TargetRows({ rows, withFaab }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Player</th>
+            <th>Team</th>
+            <th style={{ textAlign: 'right' }}>Owned*</th>
+            {withFaab && <th style={{ textAlign: 'right' }}>FAAB %</th>}
+            {withFaab && <th style={{ textAlign: 'right' }}>Your $</th>}
+            <th>Here</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((t, i) => (
+            <tr key={`${t.name}-${i}`}>
+              <td style={{ whiteSpace: 'normal', minWidth: 220 }}>
+                <strong>{t.name}</strong>
+                <Blurb text={t.blurb} />
+              </td>
+              <td>{t.team || ''}</td>
+              <td className="num">{t.owned_pct != null ? `${t.owned_pct}%` : '—'}</td>
+              {withFaab && (
+                <td className="num">{faabRange(t.faab_pct_low, t.faab_pct_high, pctUnit)}</td>
+              )}
+              {withFaab && (
+                <td className="num">{faabRange(t.faab_low, t.faab_high, dollarUnit)}</td>
+              )}
+              <td>
+                <StatusBadge tone={STATUS_TONE[t.status]} label={STATUS_LABEL[t.status]} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/**
+ * FantasyGuru's weekly waiver report. FAAB % is the author's figure for
+ * 12-team leagues, of the starting budget; "Your $" converts it at this
+ * league's budget without rescaling for league size.
+ */
+function WaiverReport({ leagueKey }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['waiverReport', leagueKey],
+    queryFn: () => api.waiverReport(leagueKey),
+    enabled: Boolean(leagueKey),
+    retry: false,
+  })
+
+  if (isLoading) return <div className="empty">Loading the waiver report…</div>
+  if (error) return <div className="error">{String(error.message)}</div>
+  if (!data?.available) {
+    return (
+      <div className="card">
+        <div className="platform">FantasyGuru</div>
+        <h3>Waiver report</h3>
+        <div className="empty">
+          Not fetched yet - run <code>fcc fantasyguru refresh</code>.
+        </div>
+      </div>
+    )
+  }
+
+  const positions = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF']
+  const targets = data.targets.filter((t) => t.tier === 'target')
+  const deeper = data.targets.filter((t) => t.tier === 'deeper')
+  const byPos = (rows) =>
+    [...positions, null]
+      .map((pos) => [pos, rows.filter((t) => (t.position || null) === pos)])
+      .filter(([, rs]) => rs.length)
+
+  return (
+    <div className="card">
+      <div className="platform">FantasyGuru · Tyler Buecher</div>
+      <h3>
+        <a href={data.url} target="_blank" rel="noreferrer">
+          {data.title}
+        </a>
+      </h3>
+      <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+        Fetched {new Date(data.fetched_at).toLocaleString()}. FAAB % is his figure for 12-team
+        leagues; Your $ applies it to your ${data.budget_total} budget, not scaled for league size.
+        *Owned is his Yahoo figure, not this league.
+      </div>
+
+      {data.priority.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Favorite priority adds</div>
+          <div className="table-wrap">
+            <table>
+              <tbody>
+                {data.priority.map((p, i) => (
+                  <tr key={`${p.name}-${i}`}>
+                    <td>
+                      <strong>{p.name}</strong>
+                    </td>
+                    <td>{p.position}</td>
+                    <td>{p.team}</td>
+                    <td className="num">{faabRange(p.faab_pct_low, p.faab_pct_high, pctUnit)}</td>
+                    <td className="num">{faabRange(p.faab_low, p.faab_high, dollarUnit)}</td>
+                    <td>
+                      <StatusBadge tone={STATUS_TONE[p.status]} label={STATUS_LABEL[p.status]} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {byPos(targets).map(([pos, rows]) => (
+        <div key={pos || 'other'} style={{ marginTop: 16 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>{pos || 'Other'}</div>
+          <TargetRows rows={rows} withFaab />
+        </div>
+      ))}
+
+      {deeper.length > 0 && (
+        <details style={{ marginTop: 16 }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)' }}>
+            Deeper formats ({deeper.length}) - named without a FAAB figure
+          </summary>
+          <div style={{ marginTop: 10 }}>
+            <TargetRows rows={deeper} withFaab={false} />
+          </div>
+        </details>
+      )}
+
+      {data.defenses.length > 0 && (
+        <details style={{ marginTop: 12 }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)' }}>
+            D/ST streamers ({data.defenses.length})
+          </summary>
+          <ul style={{ paddingLeft: 18, marginTop: 8 }}>
+            {data.defenses.map((d) => (
+              <li key={d.name} style={{ marginBottom: 6 }}>
+                <strong>
+                  {d.name} {d.where} {d.opp}
+                </strong>
+                <Blurb text={d.note} />
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {data.unparsed.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <StatusBadge tone="warning" label="Lines the parser didn't recognise" />
+          <ul style={{ paddingLeft: 18, marginTop: 6, color: 'var(--text-secondary)' }}>
+            {data.unparsed.map((l) => (
+              <li key={l}>{l}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
 
 /**
  * Your own queue. Pending claims are private to your account, so this needs
@@ -273,7 +474,7 @@ function PendingClaims({ leagueKey }) {
  * you, independent of what winning costs. A player with no `recommend` has no
  * Sleeper projection this week, not a value of zero.
  */
-function FreeAgents({ byPosition, position }) {
+function FreeAgents({ byPosition, position, expert, fgProjections }) {
   const positions = Object.keys(byPosition).sort()
   if (!positions.length) return null
   const shown = position && byPosition[position] ? [position] : positions
@@ -282,6 +483,14 @@ function FreeAgents({ byPosition, position }) {
     <div className="card">
       <div className="platform">Free agents, this week's projection</div>
       <h3>What to spend right now</h3>
+      <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+        {expert
+          ? `FG rank: Jeff Mans' PPR board, fetched ${new Date(expert.fetched_at).toLocaleString()}. Blank = outside his board.`
+          : 'FG rank unavailable - run `fcc fantasyguru refresh` to fetch the board.'}{' '}
+        {fgProjections
+          ? 'FG proj/ceiling use FantasyGuru\'s weekly projections, priced the same way as Sleeper\'s.'
+          : 'FG projections not fetched yet.'}
+      </div>
 
       {shown.map((pos) => (
         <div key={pos} style={{ marginTop: pos === shown[0] ? 10 : 20 }}>
@@ -294,10 +503,13 @@ function FreeAgents({ byPosition, position }) {
                 <tr>
                   <th>Player</th>
                   <th>Team</th>
-                  <th style={{ textAlign: 'right' }}>Proj pts</th>
+                  <th style={{ textAlign: 'right' }}>FG rank</th>
+                  <th style={{ textAlign: 'right' }}>Proj (SLP)</th>
+                  <th style={{ textAlign: 'right' }}>Proj (FG)</th>
                   <th style={{ textAlign: 'right' }}>VOR</th>
                   <th style={{ textAlign: 'right' }}>Market (65%)</th>
-                  <th style={{ textAlign: 'right' }}>Value ceiling</th>
+                  <th style={{ textAlign: 'right' }}>Ceiling (SLP)</th>
+                  <th style={{ textAlign: 'right' }}>Ceiling (FG)</th>
                 </tr>
               </thead>
               <tbody>
@@ -305,14 +517,13 @@ function FreeAgents({ byPosition, position }) {
                   <tr key={p.player_id}>
                     <td>{p.name}</td>
                     <td>{p.team || ''}</td>
+                    <td className="num">{p.expert_rank ? `${pos}${p.expert_rank}` : '—'}</td>
                     <td className="num">{p.projected_points?.toFixed(1) ?? '—'}</td>
+                    <td className="num">{p.fg_projected_points?.toFixed(1) ?? '—'}</td>
                     <td className="num">{p.vor != null ? p.vor.toFixed(1) : '—'}</td>
                     <td className="num">{money(p.market_price)}</td>
-                    <td className="num">
-                      {p.recommend
-                        ? `${money(p.recommend.low)}–${money(p.recommend.high)}`
-                        : '—'}
-                    </td>
+                    <td className="num">{range(p.recommend)}</td>
+                    <td className="num">{range(p.fg_recommend)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -359,6 +570,7 @@ export function WaiversTab({ leagues }) {
       )}
 
       <PendingClaims leagueKey={key} />
+      <WaiverReport leagueKey={key} />
 
       {isLoading && <div className="empty">Reading the league's transaction history…</div>}
       {error && <div className="error">{String(error.message)}</div>}
@@ -372,7 +584,12 @@ export function WaiversTab({ leagues }) {
             <div className="error">Free-agent board unavailable — {data.free_agents.error}</div>
           )}
           {data.free_agents?.by_position && (
-            <FreeAgents byPosition={data.free_agents.by_position} position={position} />
+            <FreeAgents
+              byPosition={data.free_agents.by_position}
+              position={position}
+              expert={data.free_agents.expert}
+              fgProjections={data.free_agents.fg_projections}
+            />
           )}
 
           {data.top_claims.length > 0 && (

@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 
-#: Content of these elements is never text worth reading.
-_SKIP = {"script", "style", "noscript", "svg", "head", "meta", "link"}
+#: Content of these elements is never text worth reading. Void elements (meta,
+#: link) must not be listed: they never get an end tag, so the skip depth would
+#: never unwind and every word after the first <link> would be dropped.
+_SKIP = {"script", "style", "noscript", "svg", "head"}
 
 #: Elements that imply a line break, so table rows and list items stay separate.
 _BLOCK = {

@@ -19,9 +19,13 @@ content is not redistributed.
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import logging
+import re
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -37,11 +41,25 @@ from fcc.sources.html_text import html_to_text
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://www.fantasyguru.com"
-LOGIN_URL = f"{BASE_URL}/login"
+LOGIN_URL = f"{BASE_URL}/account/login"
+
+#: The session cookie the site sets on a successful sign-in. Its presence is the
+#: positive signal that we are logged in - scanning page text for "please log
+#: in" wording let a paywalled page pass as logged-in, because the site says
+#: "Unlock the rankings" instead.
+AUTH_COOKIE = "fg_auth_token"
 
 #: How long a cached page stays fresh. Staff picks move during the week, so this
 #: is short enough to pick up Sunday-morning updates.
 CACHE_TTL_SECONDS = 60 * 30
+
+#: Jeff Mans' weekly board, PPR scoring - matches the Sleeper league's format.
+RANKINGS_URL = f"{BASE_URL}/jeff-mans-nfl-weekly-rankings-ppr"
+#: The board's position filter values, in the order they're exported.
+RANKING_POSITIONS: tuple[str, ...] = ("QB", "RB", "WR", "TE", "K", "DST")
+
+#: Weekly offensive projections - per-player stat lines with PPR/half/non points.
+PROJECTIONS_URL = f"{BASE_URL}/nfl-projections-weekly-off"
 
 
 class FantasyGuruError(RuntimeError):
@@ -265,6 +283,297 @@ def extract_rankings(
 
 
 # --------------------------------------------------------------------------
+# Rankings board (CSV export - no LLM needed)
+# --------------------------------------------------------------------------
+def parse_rankings_csv(text: str, position: str) -> list[RankedPlayer]:
+    """One position's CSV export into ranked players. Pure - no network.
+
+    The board carries ranks, not projected points, so ``projected_points``
+    stays ``None``: a rank is not a point total, and inventing one from it
+    would feed made-up numbers into the value math.
+    """
+    reader = csv.DictReader(io.StringIO(text))
+    header = {(h or "").strip().upper() for h in reader.fieldnames or []}
+    if not {"RANK", "PLAYER", "TEAM"} <= header:
+        raise FantasyGuruError(f"Rankings CSV columns changed: {reader.fieldnames}")
+
+    pos = "DEF" if position.upper() in ("DST", "DEF") else position.upper()
+    out: list[RankedPlayer] = []
+    for raw in reader:
+        row = {(k or "").strip().upper(): (v or "").strip() for k, v in raw.items()}
+        try:
+            rank = int(row["RANK"])
+        except (KeyError, ValueError):
+            continue
+        if not row.get("PLAYER"):
+            continue
+        out.append(
+            RankedPlayer(
+                name=row["PLAYER"], position=pos, positional_rank=rank,
+                team=row.get("TEAM") or None,
+            )
+        )
+    return out
+
+
+def rankings_cache_path() -> Path:
+    return get_settings().data_path / "cache" / "fantasyguru" / "rankings.json"
+
+
+def save_rankings(csvs: dict[str, str], url: str = RANKINGS_URL) -> dict:
+    """Parse and persist a fetched board; the raw CSVs are kept as evidence."""
+    board = {
+        "fetched_at": datetime.now(UTC).isoformat(),
+        "url": url,
+        "positions": {
+            ("DEF" if pos == "DST" else pos): [
+                {"name": p.name, "team": p.team, "rank": p.positional_rank}
+                for p in parse_rankings_csv(text, pos)
+            ]
+            for pos, text in csvs.items()
+        },
+        "raw_csv": csvs,
+    }
+    path = rankings_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(board, indent=1))
+    return board
+
+
+def load_rankings() -> dict | None:
+    path = rankings_cache_path()
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+# --------------------------------------------------------------------------
+# Weekly projections (CSV export)
+# --------------------------------------------------------------------------
+#: Board column for each scoring format, keyed the way the Sleeper side names them.
+PROJECTION_COLUMNS = {"ppr": "PPR", "half_ppr": "HALF", "std": "NON"}
+
+
+def parse_projections_csv(text: str) -> list[dict]:
+    """The projections export as ``{position, name, team, opp, ppr, half_ppr, std}`` rows."""
+    reader = csv.DictReader(io.StringIO(text))
+    header = {(h or "").strip().upper() for h in reader.fieldnames or []}
+    needed = {"POS", "PLAYER", "TEAM", *PROJECTION_COLUMNS.values()}
+    if not needed <= header:
+        raise FantasyGuruError(f"Projections CSV columns changed: {reader.fieldnames}")
+
+    out = []
+    for raw in reader:
+        row = {(k or "").strip().upper(): (v or "").strip() for k, v in raw.items()}
+        if not row.get("PLAYER") or not row.get("POS"):
+            continue
+        points = {}
+        for key, column in PROJECTION_COLUMNS.items():
+            try:
+                points[key] = float(row[column])
+            except ValueError:
+                points[key] = None
+        out.append({
+            "position": row["POS"].upper(), "name": row["PLAYER"],
+            "team": row.get("TEAM") or None, "opp": row.get("OPP") or None, **points,
+        })
+    if not out:
+        raise FantasyGuruError("Projections CSV had no players.")
+    return out
+
+
+def projections_cache_path() -> Path:
+    return get_settings().data_path / "cache" / "fantasyguru" / "projections.json"
+
+
+def save_projections(text: str, url: str = PROJECTIONS_URL) -> dict:
+    saved = {
+        "fetched_at": datetime.now(UTC).isoformat(), "url": url,
+        "players": parse_projections_csv(text), "raw_csv": text,
+    }
+    path = projections_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(saved, indent=1))
+    return saved
+
+
+def load_projections() -> dict | None:
+    path = projections_cache_path()
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+# --------------------------------------------------------------------------
+# Weekly waiver report (fixed line format - no LLM needed)
+# --------------------------------------------------------------------------
+#: The NFL hub page lists the current week's articles, including the report.
+NFL_HUB_URL = f"{BASE_URL}/nfl-seasonal"
+
+_WAIVER_LINK = re.compile(r'href="/(?P<slug>(?P<season>\d{4})-week-(?P<week>\d+)-waiver-report)"')
+
+_POSITION_HEADINGS = {
+    "quarterbacks": "QB",
+    "running backs": "RB",
+    "wide receivers": "WR",
+    "tight ends": "TE",
+    "kickers": "K",
+    "defense / special teams": "DEF",
+    "defense/special teams": "DEF",
+    "team defenses": "DEF",
+}
+
+_DASH = r"\s*[—–-]+\s*"
+#: "Jacoby Brissett, ARI (10% Owned Yahoo) — FAAB Recommendation: 0-2%"
+#: The team is sometimes omitted ("Kalif Raymond (10% Owned Yahoo) – ...").
+_TARGET = re.compile(
+    r"^(?P<name>[^(]+?)(?:,\s*(?P<team>[A-Z]{2,3}))?\s*\((?P<owned>\d+)% Owned[^)]*\)"
+    + _DASH + r"(?P<rest>.*)$"
+)
+_FAAB = re.compile(r"FAAB Recommendation:\s*(?P<lo>\d+)(?:\s*[–-]\s*(?P<hi>\d+))?\s*%", re.I)
+#: "Kenyon Sadiq, TE, NYJ (15% FAAB)" under "Favorite Priority Adds".
+_PRIORITY = re.compile(
+    r"^(?P<name>.+?),\s*(?P<pos>[A-Z]{1,3}),\s*(?P<team>[A-Z]{2,3})\s*"
+    r"\((?P<lo>\d+)(?:\s*[–-]\s*(?P<hi>\d+))?% FAAB\)$"
+)
+#: "Buffalo Bills vs NE – I was giving Maye a pass..."
+_DEFENSE = re.compile(
+    r"^(?P<name>[A-Z][\w .'’]+?) (?P<where>vs|at|@) (?P<opp>[A-Z]{2,3})"
+    + _DASH + r"(?P<note>.+)$"
+)
+
+
+def find_waiver_report_url(hub_html: str) -> str | None:
+    """The newest ``<season>-week-<n>-waiver-report`` linked from the hub."""
+    found = [(int(m["season"]), int(m["week"]), m["slug"]) for m in _WAIVER_LINK.finditer(hub_html)]
+    return f"{BASE_URL}/{max(found)[2]}" if found else None
+
+
+def _faab(lo: str | None, hi: str | None) -> dict:
+    low = int(lo) if lo is not None else None
+    return {"faab_pct_low": low, "faab_pct_high": int(hi) if hi is not None else low}
+
+
+def parse_waiver_report(html: str) -> dict:
+    """Structure the weekly waiver report. Pure - no network.
+
+    Recommendations are written one per line in a fixed format, so they're
+    read with patterns rather than a model. Any line that *looks* like a
+    recommendation but doesn't fit is returned in ``unparsed`` instead of
+    being dropped, so a format change shows up on the dashboard rather than
+    as a quietly shorter list.
+    """
+    lines = [re.sub(r"\s+", " ", ln).strip() for ln in html_to_text(html).splitlines()]
+    lines = [ln for ln in lines if ln]
+
+    report: dict = {
+        "title": None, "week": None, "priority": [], "targets": [], "defenses": [],
+        "unparsed": [],
+    }
+    position: str | None = None
+    tier = "target"
+    mode = "preamble"
+    #: Picks still waiting for a write-up. Teammates often share one paragraph
+    #: ("Ollie Gordon and Jaylen Wright..."), so it belongs to all of them.
+    unwritten: list[dict] = []
+
+    for line in lines:
+        lower = line.lower().rstrip(":")
+        title = re.search(r"week (\d+) waiver report$", lower)
+        if report["title"] is None and title:
+            report["title"], report["week"] = line, int(title.group(1))
+            continue
+        if lower.endswith("waiver targets"):
+            mode = "targets"
+            continue
+        if mode == "preamble":
+            continue
+        if lower in _POSITION_HEADINGS:
+            position, tier, mode = _POSITION_HEADINGS[lower], "target", "targets"
+            unwritten = []
+            continue
+        if lower.startswith("names to consider"):
+            tier, unwritten = "deeper", []
+            continue
+        if lower == "favorite priority adds":
+            mode, unwritten = "priority", []
+            continue
+        if lower == "related articles" or lower.startswith("if you have any specific"):
+            break
+
+        if mode == "priority":
+            m = _PRIORITY.match(line)
+            if m:
+                report["priority"].append({
+                    "name": m["name"].strip(), "position": m["pos"], "team": m["team"],
+                    **_faab(m["lo"], m["hi"]),
+                })
+            elif "faab" in lower:
+                report["unparsed"].append(line)
+            continue
+
+        m = _TARGET.match(line)
+        if m:
+            faab = _FAAB.search(m["rest"])
+            pick = {
+                "position": position, "tier": tier, "name": m["name"].strip(),
+                "team": m["team"], "owned_pct": int(m["owned"]),
+                **(_faab(faab["lo"], faab["hi"]) if faab else _faab(None, None)),
+                "blurb": "" if faab else m["rest"].strip(),
+            }
+            report["targets"].append(pick)
+            unwritten = [] if pick["blurb"] else [*unwritten, pick]
+            continue
+        if position == "DEF" and (d := _DEFENSE.match(line)):
+            report["defenses"].append({
+                "name": d["name"].strip(), "where": d["where"], "opp": d["opp"],
+                "note": d["note"].strip(),
+            })
+            unwritten = []
+            continue
+        if "faab recommendation" in lower or "% owned" in lower:
+            report["unparsed"].append(line)
+            continue
+        # Prose following a recommendation is its write-up; keep the first
+        # paragraph, which is where the case for the player is made.
+        for pick in unwritten:
+            pick["blurb"] = line
+        unwritten = []
+
+    if not report["targets"] and not report["priority"]:
+        raise FantasyGuruError(
+            "No recommendations found in the waiver report - the page layout may have changed."
+        )
+    return report
+
+
+def waiver_report_cache_path() -> Path:
+    return get_settings().data_path / "cache" / "fantasyguru" / "waiver_report.json"
+
+
+def save_waiver_report(report: dict, url: str) -> dict:
+    saved = {**report, "url": url, "fetched_at": datetime.now(UTC).isoformat()}
+    path = waiver_report_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(saved, indent=1))
+    return saved
+
+
+def load_waiver_report() -> dict | None:
+    path = waiver_report_cache_path()
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+@contextmanager
+def _playwright():
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:  # pragma: no cover - environment-dependent
+        raise FantasyGuruError(
+            "Playwright is not installed. `pip install playwright && "
+            "playwright install chromium`."
+        ) from exc
+    with sync_playwright() as pw:
+        yield pw
+
+
+# --------------------------------------------------------------------------
 # Authenticated fetch (Playwright)
 # --------------------------------------------------------------------------
 class FantasyGuruSession:
@@ -315,64 +624,147 @@ class FantasyGuruSession:
             if cached is not None:
                 return cached
 
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError as exc:  # pragma: no cover - environment-dependent
-            raise FantasyGuruError(
-                "Playwright is not installed. `pip install playwright && "
-                "playwright install chromium`."
-            ) from exc
-
-        with sync_playwright() as pw:
+        with _playwright() as pw:
             browser = pw.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-                )
-            )
-            cookies = self._load_cookies()
-            if cookies:
-                context.add_cookies(cookies)
+            try:
+                page = self._logged_in_page(browser)
+                self._open(page, url)
+                html = page.content()
+            finally:
+                browser.close()
 
-            page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-
-            if self._looks_logged_out(page.content()):
-                log.info("FantasyGuru session stale; logging in")
-                self._login(page)
-                page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-                self._save_cookies(context.cookies())
-
-            html = page.content()
-            browser.close()
-
-        if self._looks_logged_out(html):
-            raise FantasyGuruError(
-                "Still logged out after a login attempt. Check the stored "
-                "FantasyGuru credentials, or whether the login page changed."
-            )
         self._store_cache(url, html)
         return html
+
+    def fetch_rankings(
+        self, url: str = RANKINGS_URL, positions: tuple[str, ...] = RANKING_POSITIONS
+    ) -> dict[str, str]:
+        """Each position's CSV export from a rankings board, as ``{position: csv}``.
+
+        The board shows one position at a time behind a ``<select>``, and its
+        CSV button exports the whole filtered list across every page. Each
+        export is checked against the first row the page is showing, so a
+        filter that silently failed to apply can't pass one position's list
+        off as another's.
+        """
+        out: dict[str, str] = {}
+        with _playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                page = self._logged_in_page(browser)
+                self._open(page, url)
+                select = page.locator("main select:has(option[value='QB'])").first
+                for pos in positions:
+                    select.select_option(pos)
+                    page.wait_for_load_state("networkidle", timeout=30_000)
+                    shown = page.locator("main table tbody tr td").nth(1).inner_text().strip()
+                    with page.expect_download(timeout=30_000) as dl:
+                        page.get_by_role("button", name="CSV", exact=True).click()
+                    text = Path(dl.value.path()).read_text()
+                    first = next(iter(parse_rankings_csv(text, pos)), None)
+                    if first is None or first.name != shown:
+                        raise FantasyGuruError(
+                            f"{pos} export doesn't match the board (page shows {shown!r}, "
+                            f"CSV starts {first.name if first else None!r}). The position "
+                            "filter may have changed."
+                        )
+                    if text in out.values():
+                        raise FantasyGuruError(f"{pos} export is identical to another position's.")
+                    out[pos] = text
+            finally:
+                browser.close()
+        return out
+
+    def fetch_projections(self, url: str = PROJECTIONS_URL) -> str:
+        """The weekly projections board as one CSV (every position, every page)."""
+        with _playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                page = self._logged_in_page(browser)
+                self._open(page, url)
+                # "" is the board's all-positions filter; set it explicitly so
+                # a remembered filter can't quietly narrow the export.
+                page.locator("main select:has(option[value='QB'])").first.select_option("")
+                page.wait_for_load_state("networkidle", timeout=30_000)
+                with page.expect_download(timeout=30_000) as dl:
+                    page.get_by_role("button", name="CSV", exact=True).click()
+                return Path(dl.value.path()).read_text()
+            finally:
+                browser.close()
+
+    def _open(self, page, url: str) -> None:
+        """Navigate to a subscriber page, re-logging in once if it's still locked."""
+        # The site renders content client-side, so wait for the network to
+        # settle rather than for the bare HTML shell.
+        page.goto(url, wait_until="networkidle", timeout=60_000)
+        if self._looks_locked(self._main_text(page)):
+            # A stored cookie can outlive its server-side session. Drop it, log
+            # in once more, then accept whatever the page says.
+            log.info("page locked with a stored session; logging in again")
+            page.context.clear_cookies()
+            self._login(page)
+            self._save_cookies(page.context.cookies())
+            page.goto(url, wait_until="networkidle", timeout=60_000)
+        if self._looks_locked(self._main_text(page)):
+            raise FantasyGuruError(
+                f"{url} is still behind the paywall while logged in. The subscription "
+                "may not include this page, or the session was rejected."
+            )
+
+    def _logged_in_page(self, browser):
+        """A page in a context holding a valid session, logging in if needed."""
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            )
+        )
+        cookies = self._load_cookies()
+        if cookies:
+            context.add_cookies(cookies)
+        page = context.new_page()
+        if not self._has_session(context):
+            log.info("no FantasyGuru session cookie; logging in")
+            self._login(page)
+            self._save_cookies(context.cookies())
+        return page
+
+    @staticmethod
+    def _has_session(context) -> bool:
+        return any(c["name"] == AUTH_COOKIE for c in context.cookies())
 
     def _login(self, page) -> None:
         username = self.store.require(Keys.FANTASYGURU_USERNAME)
         password = self.store.require(Keys.FANTASYGURU_PASSWORD)
-        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=45_000)
-        # Selectors are intentionally broad: this is the part most likely to
-        # break on a redesign, and a broad match fails loudly rather than subtly.
-        page.fill("input[type='email'], input[name='username'], input[name='email']", username)
-        page.fill("input[type='password'], input[name='password']", password)
-        page.click("button[type='submit'], input[type='submit']")
-        page.wait_for_load_state("networkidle", timeout=45_000)
+        page.goto(LOGIN_URL, wait_until="networkidle", timeout=60_000)
+        page.fill("input[name='email']", username)
+        page.fill("input[name='password']", password)
+        page.click("form button[type='submit'], form button:has-text('Sign in')")
+        # The submit is an async server action: "network idle" can arrive before
+        # the cookie does. Wait for the cookie itself, which is what success means.
+        for _ in range(60):
+            if self._has_session(page.context):
+                return
+            page.wait_for_timeout(500)
+        raise FantasyGuruError(
+            "Sign-in produced no session cookie. Check the stored FantasyGuru "
+            "credentials, or whether the login page changed."
+        )
 
     @staticmethod
-    def _looks_logged_out(html: str) -> bool:
-        text = html_to_text(html).lower()
-        markers = (
-            "sign in to continue",
-            "subscribe to read",
-            "please log in",
-            "start your subscription",
-        )
+    def _main_text(page) -> str:
+        """Rendered text of the page's main content, not the site chrome.
+
+        Membership promos in the sidebar and footer say "Already a member?
+        Sign in" on every page, logged in or not, so reading the whole body
+        makes an unlocked page look paywalled.
+        """
+        main = page.query_selector("main") or page.query_selector("body")
+        return main.inner_text() if main else ""
+
+    @staticmethod
+    def _looks_locked(text: str) -> bool:
+        """The paywall's own call to action, e.g. "UNLOCK THE RANKINGS"."""
+        text = text.lower()
+        markers = ("unlock the", "sign in to continue", "subscribe to read", "please log in")
         return any(m in text for m in markers)

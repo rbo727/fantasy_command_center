@@ -18,6 +18,9 @@ projection is worth less in a four-team endgame than in a twelve-team week 1.
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
@@ -151,6 +154,47 @@ def top_free_agents_by_position(
         group.sort(key=lambda p: -p.projected_points)
         out[pos] = group[:limit]
     return out
+
+
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def normalize_player_name(name: str) -> str:
+    """Case, accents, punctuation and suffixes removed: 'A.J. Brown Jr.' -> 'aj brown'.
+
+    Accents matter in practice: FantasyGuru writes "Piñeiro", Sleeper "Pineiro".
+    """
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    words = re.sub(r"[.'’]", "", ascii_name.lower()).replace("-", " ").split()
+    return " ".join(w for w in words if w not in _NAME_SUFFIXES)
+
+
+def rank_lookup(board: dict[str, list[dict]]) -> Callable[[RankedPlayer], int | None]:
+    """Match players against an expert board of ``{position: [{name, team, rank}]}``.
+
+    Matches on position + name + team, then on position + name alone when
+    that name is unique at the position (covers a stale team in either
+    source). Anything ambiguous returns ``None`` - no rank beats the wrong
+    player's rank.
+    """
+    from fcc.core.teams import normalize as team_code
+
+    full: dict[tuple, list[int]] = {}
+    by_name: dict[tuple, list[int]] = {}
+    for pos, rows in board.items():
+        for row in rows:
+            key = (pos.upper(), normalize_player_name(row["name"]))
+            full.setdefault((*key, team_code(row.get("team"))), []).append(row["rank"])
+            by_name.setdefault(key, []).append(row["rank"])
+
+    def lookup(player: RankedPlayer) -> int | None:
+        key = (player.pos, normalize_player_name(player.name))
+        for hits in (full.get((*key, team_code(player.team))), by_name.get(key)):
+            if hits:
+                return hits[0] if len(hits) == 1 else None
+        return None
+
+    return lookup
 
 
 def find(players: list[RankedPlayer], name: str) -> RankedPlayer | None:

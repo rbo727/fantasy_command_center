@@ -389,3 +389,67 @@ def test_claims_connector_failure_is_502(client, monkeypatch):
     resp = client.get("/api/leagues/sleeper_main/waiver-claims")
     assert resp.status_code == 502
     assert "token expired" in resp.json()["detail"]
+
+
+# --- FantasyGuru waiver report ------------------------------------------------
+def _report_league(monkeypatch, report):
+    from fcc.platforms.base import Player, Roster, RosterSlot
+
+    class C:
+        def league(self):
+            return {"settings": {"waiver_budget": 1000}}
+
+        def players(self):
+            return {
+                "sadiq": {"full_name": "Kenyon Sadiq", "position": "TE", "team": "NYJ"},
+                "wright": {"full_name": "Jaylen Wright", "position": "RB", "team": "MIA"},
+                "mine": {"full_name": "Braelon Allen", "position": "RB", "team": "NYJ"},
+            }
+
+        def rostered_player_ids(self):
+            return {"sadiq", "mine"}
+
+        def roster(self):
+            return Roster(league_key="k", team_id="1", slots=[
+                RosterSlot(slot="RB", starter=True, player=Player(player_id="mine", name="B")),
+            ])
+
+    monkeypatch.setattr(
+        "fcc.core.config.Settings.league",
+        lambda self, key: LeagueConfig(key=key, platform="sleeper", league_id="1", season=2026),
+    )
+    monkeypatch.setattr("fcc.api.app.connector_for", lambda lg, store=None: C())
+    monkeypatch.setattr("fcc.sources.fantasyguru.load_waiver_report", lambda: report)
+
+
+def _pick(name, pos, team, lo, hi):
+    return {"name": name, "position": pos, "team": team, "faab_pct_low": lo, "faab_pct_high": hi}
+
+
+def test_waiver_report_not_fetched_says_so(client, monkeypatch):
+    _report_league(monkeypatch, None)
+    assert client.get("/api/leagues/sleeper_main/waiver-report").json() == {"available": False}
+
+
+def test_waiver_report_prices_faab_and_checks_availability(client, monkeypatch):
+    report = {
+        "title": "2026 Week 4 Waiver Report", "week": 4, "url": "u", "fetched_at": "t",
+        "priority": [_pick("Kenyon Sadiq", "TE", "NYJ", 15, 15)],
+        "targets": [
+            {**_pick("Kenyon Sadiq", "TE", "NYJ", 15, 15), "tier": "target"},
+            {**_pick("Jaylen Wright", "RB", "MIA", 5, 10), "tier": "target"},
+            {**_pick("Braelon Allen", "RB", "NYJ", 10, 15), "tier": "target"},
+            {**_pick("Nobody Known", "WR", "KC", 1, 3), "tier": "target"},
+        ],
+        "defenses": [], "unparsed": [],
+    }
+    _report_league(monkeypatch, report)
+    body = client.get("/api/leagues/sleeper_main/waiver-report").json()
+
+    # A priority add that repeats a target must still match, not read as ambiguous.
+    assert body["priority"][0]["status"] == "rostered"
+    status = {t["name"]: t["status"] for t in body["targets"]}
+    assert status == {"Kenyon Sadiq": "rostered", "Jaylen Wright": "available",
+                      "Braelon Allen": "yours", "Nobody Known": "unmatched"}
+    wright = next(t for t in body["targets"] if t["name"] == "Jaylen Wright")
+    assert (wright["faab_low"], wright["faab_high"]) == (50, 100)   # 5-10% of $1000

@@ -23,10 +23,12 @@ secrets_app = typer.Typer(help="Manage encrypted credentials")
 pickem_app = typer.Typer(help="ESPN pick'em automation")
 lineup_app = typer.Typer(help="Lineup guardian")
 faab_app = typer.Typer(help="FAAB bidding")
+fantasyguru_app = typer.Typer(help="FantasyGuru subscriber data")
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(pickem_app, name="pickem")
 app.add_typer(lineup_app, name="lineup")
 app.add_typer(faab_app, name="faab")
+app.add_typer(fantasyguru_app, name="fantasyguru")
 
 console = Console()
 
@@ -722,6 +724,65 @@ def faab_bid(
             "\n[yellow]FAAB is money tier: nothing here is submitted. "
             "This is advice for you to act on.[/yellow]"
         )
+
+
+# --------------------------------------------------------------------------
+# FantasyGuru
+# --------------------------------------------------------------------------
+@fantasyguru_app.command("refresh")
+def fantasyguru_refresh() -> None:
+    """Fetch the rankings board, weekly projections and latest waiver report.
+
+    Each source is cached for the dashboard, which never touches the site
+    itself - so run this on a schedule rather than per view. Sources fail
+    independently: one layout change doesn't block the other two, but any
+    failure exits non-zero so the cron log shows it.
+    """
+    from fcc.sources.fantasyguru import (
+        NFL_HUB_URL,
+        FantasyGuruSession,
+        find_waiver_report_url,
+        parse_waiver_report,
+        save_projections,
+        save_rankings,
+        save_waiver_report,
+    )
+
+    session = FantasyGuruSession()
+
+    def rankings() -> str:
+        board = save_rankings(session.fetch_rankings())
+        counts = ", ".join(f"{pos} {len(rows)}" for pos, rows in board["positions"].items())
+        return f"rankings board: {counts}"
+
+    def projections() -> str:
+        saved = save_projections(session.fetch_projections())
+        return f"projections: {len(saved['players'])} players"
+
+    def waiver_report() -> str:
+        url = find_waiver_report_url(session.fetch(NFL_HUB_URL))
+        if url is None:
+            raise RuntimeError("no waiver report linked from the NFL hub")
+        report = save_waiver_report(parse_waiver_report(session.fetch(url, force=True)), url)
+        faab = sum(1 for t in report["targets"] if t["faab_pct_low"] is not None)
+        line = (
+            f"{report['title']}: {len(report['priority'])} priority adds, "
+            f"{faab} FAAB recommendations, {len(report['targets']) - faab} deeper names"
+        )
+        if report["unparsed"]:
+            line += f" ({len(report['unparsed'])} line(s) not recognised - shown on the dashboard)"
+        return line
+
+    failed = False
+    for name, step in (("rankings", rankings), ("projections", projections),
+                       ("waiver report", waiver_report)):
+        try:
+            console.print(f"[green]ok[/green]   {step()}")
+        except Exception as exc:  # noqa: BLE001 - one source must not block the others
+            failed = True
+            console.print(f"[red]fail[/red] {name}: {type(exc).__name__}: {exc}")
+    if failed:
+        raise typer.Exit(code=1)
 
 
 # --------------------------------------------------------------------------

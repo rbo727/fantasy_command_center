@@ -10,6 +10,8 @@ higher bar to clear.
 from fcc.engines.value import (
     RankedPlayer,
     find,
+    normalize_player_name,
+    rank_lookup,
     replacement_points,
     replacement_rank,
     top_free_agents_by_position,
@@ -165,3 +167,40 @@ def test_board_is_limited_per_position():
     board = top_free_agents_by_position(players, rostered_ids=set(), limit=10)
     assert len(board["RB"]) == 10
     assert board["RB"][0].name == "RB14"     # highest projection first
+
+
+# --- matching an expert board -----------------------------------------------
+def test_names_normalize_across_sources():
+    assert normalize_player_name("A.J. Brown") == normalize_player_name("AJ Brown")
+    assert normalize_player_name("Marvin Harrison Jr.") == "marvin harrison"
+    assert normalize_player_name("Eddy Piñeiro") == normalize_player_name("Eddy Pineiro")
+    assert normalize_player_name("Amon-Ra St. Brown") == normalize_player_name("Amon-Ra St Brown")
+
+
+def test_rank_matches_on_name_position_and_team():
+    lookup = rank_lookup({"WR": [{"name": "A.J. Brown", "team": "PHI", "rank": 12}]})
+    assert lookup(RankedPlayer(name="AJ Brown", position="WR", team="PHI")) == 12
+    # Same name at another position is a different player.
+    assert lookup(RankedPlayer(name="AJ Brown", position="RB", team="PHI")) is None
+
+
+def test_team_aliases_count_as_the_same_team():
+    lookup = rank_lookup({"RB": [{"name": "Travis Etienne", "team": "JAC", "rank": 9}]})
+    assert lookup(RankedPlayer(name="Travis Etienne", position="RB", team="JAX")) == 9
+
+
+def test_a_unique_name_matches_even_when_the_team_differs():
+    """One source hasn't caught up with a trade yet."""
+    lookup = rank_lookup({"WR": [{"name": "Davante Adams", "team": "LV", "rank": 20}]})
+    assert lookup(RankedPlayer(name="Davante Adams", position="WR", team="LAR")) == 20
+
+
+def test_an_ambiguous_name_gets_no_rank_rather_than_the_wrong_one():
+    lookup = rank_lookup({"WR": [
+        {"name": "Mike Williams", "team": "NYJ", "rank": 40},
+        {"name": "Mike Williams", "team": "LAC", "rank": 55},
+    ]})
+    # Team pins it...
+    assert lookup(RankedPlayer(name="Mike Williams", position="WR", team="LAC")) == 55
+    # ...but with a team matching neither, refuse rather than pick one.
+    assert lookup(RankedPlayer(name="Mike Williams", position="WR", team="PIT")) is None

@@ -363,6 +363,106 @@ def waiver_claims(key: str) -> dict:
     return {"configured": True, "pending": pending, "last_clear": last_clear}
 
 
+@app.get("/api/leagues/{key}/waiver-report")
+def waiver_report(key: str) -> dict:
+    """FantasyGuru's weekly waiver report, priced and checked against this league.
+
+    Read from the cache `fcc fantasyguru refresh` writes. FAAB percentages are
+    the author's, for 12-team leagues, of the *starting* budget; they are
+    converted to dollars at this league's budget but not rescaled for league
+    size - that adjustment is a judgement call left to you.
+    """
+    from fcc.engines.value import RankedPlayer, normalize_player_name, rank_lookup
+    from fcc.sources.fantasyguru import load_waiver_report
+
+    settings = get_settings()
+    try:
+        league = settings.league(key)
+    except KeyError as exc:
+        raise HTTPException(404, f"No league configured with key {key!r}") from exc
+    if league.platform != "sleeper":
+        raise HTTPException(400, f"{key} is a {league.platform} league; this is Sleeper-only.")
+
+    report = load_waiver_report()
+    if report is None:
+        return {"available": False}
+
+    try:
+        client = connector_for(league)
+        budget_total = (client.league().get("settings") or {}).get("waiver_budget") or 0
+        players = client.players()
+        rostered = client.rostered_player_ids()
+        mine = {
+            s.player.player_id for s in client.roster().slots if s.player is not None
+        }
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"{type(exc).__name__}: {exc}") from exc
+
+    items = report["priority"] + report["targets"]
+    # Index the report the way rank_lookup expects, one entry per distinct
+    # player (priority adds repeat names from the position lists, and a
+    # duplicate would read as ambiguous), then run every Sleeper player through it.
+    board: dict[str, list[dict]] = {}
+    ids: dict[tuple, int] = {}
+    item_ids: list[int | None] = []
+    for item in items:
+        if not item.get("position"):
+            item_ids.append(None)
+            continue
+        k = (item["position"], normalize_player_name(item["name"]), item.get("team"))
+        if k not in ids:
+            ids[k] = len(ids)
+            board.setdefault(item["position"], []).append(
+                {"name": item["name"], "team": item.get("team"), "rank": ids[k]}
+            )
+        item_ids.append(ids[k])
+    lookup = rank_lookup(board)
+    hits: dict[int, list[str]] = {}
+    for pid, raw in players.items():
+        if not raw.get("position") or not (raw.get("full_name") or raw.get("team")):
+            continue
+        idx = lookup(RankedPlayer(
+            name=raw.get("full_name") or raw.get("team"), position=raw["position"],
+            team=raw.get("team"),
+        ))
+        if idx is not None:
+            hits.setdefault(idx, []).append(str(pid))
+
+    def enrich(i: int, item: dict) -> dict:
+        found = hits.get(item_ids[i], []) if item_ids[i] is not None else []
+        pid = found[0] if len(found) == 1 else None
+        if pid is None:
+            status = "unmatched"
+        elif pid in mine:
+            status = "yours"
+        elif pid in rostered:
+            status = "rostered"
+        else:
+            status = "available"
+        lo, hi = item.get("faab_pct_low"), item.get("faab_pct_high")
+        return {
+            **item,
+            "player_id": pid,
+            "status": status,
+            "faab_low": round(lo / 100 * budget_total) if lo is not None else None,
+            "faab_high": round(hi / 100 * budget_total) if hi is not None else None,
+        }
+
+    n = len(report["priority"])
+    return {
+        "available": True,
+        "title": report["title"],
+        "week": report["week"],
+        "url": report["url"],
+        "fetched_at": report["fetched_at"],
+        "budget_total": budget_total,
+        "priority": [enrich(i, it) for i, it in enumerate(report["priority"])],
+        "targets": [enrich(n + i, it) for i, it in enumerate(report["targets"])],
+        "defenses": report["defenses"],
+        "unparsed": report["unparsed"],
+    }
+
+
 def _free_agent_board(
     client, week: int | None, budget_total: int, remaining: int | None, claims: list
 ) -> dict[str, Any]:
@@ -373,7 +473,19 @@ def _free_agent_board(
     from fcc.engines.faab import BidContext, recommend_bid
     from fcc.engines.lineup import NON_STARTING, eligible_positions
     from fcc.engines.market import BidMarket
-    from fcc.engines.value import top_free_agents_by_position, value_over_replacement
+    from fcc.engines.value import (
+        RankedPlayer,
+        rank_lookup,
+        top_free_agents_by_position,
+        value_over_replacement,
+    )
+    from fcc.sources.fantasyguru import load_projections, load_rankings
+
+    # Read from the cache `fcc fantasyguru refresh` writes; a dashboard request
+    # never launches a browser against the subscriber site.
+    expert = load_rankings()
+    expert_rank = rank_lookup(expert["positions"]) if expert else (lambda _p: None)
+    fg_projections = load_projections()
 
     try:
         week = week or client.current_week() or 1
@@ -396,17 +508,44 @@ def _free_agent_board(
         weeks_left = max(1, 18 - week)
         remaining = remaining if remaining is not None else budget_total
 
+        def ceiling(vor: float | None) -> dict | None:
+            if vor is None:
+                return None
+            bid = recommend_bid(vor, BidContext(budget_total, remaining, weeks_left), None)
+            return {"low": bid.low, "target": bid.target, "high": bid.high} if bid else None
+
+        # FantasyGuru's projections as a second, independent pool: its own
+        # replacement level, its own VOR. Matched to Sleeper players by
+        # position + name + team; an unmatched player shows no FG numbers
+        # rather than borrowing someone else's.
+        rec = (client.league().get("scoring_settings") or {}).get("rec") or 0
+        scoring = "ppr" if rec >= 1 else "half_ppr" if rec >= 0.5 else "std"
+        fg_pool = [
+            RankedPlayer(name=r["name"], position=r["position"], team=r["team"],
+                         projected_points=r[scoring])
+            for r in (fg_projections or {}).get("players", [])
+        ]
+        fg_index = rank_lookup({
+            pos: [{"name": p.name, "team": p.team, "rank": i}
+                  for i, p in enumerate(fg_pool) if p.pos == pos]
+            for pos in {p.pos for p in fg_pool}
+        })
+
+        def fg_lookup(player: RankedPlayer) -> RankedPlayer | None:
+            i = fg_index(player)
+            return fg_pool[i] if i is not None else None
+
         by_position: dict[str, list[dict]] = {}
         for pos, group in board.items():
             pos_market = BidMarket(claims=claims).comparable(pos)
             rows = []
             for p in group:
                 vor = value_over_replacement(p, ranked, total_rosters) if total_rosters else None
-                rec = None
-                if vor is not None:
-                    bid = recommend_bid(vor, BidContext(budget_total, remaining, weeks_left), None)
-                    if bid is not None:
-                        rec = {"low": bid.low, "target": bid.target, "high": bid.high}
+                fg = fg_lookup(p)
+                fg_vor = (
+                    value_over_replacement(fg, fg_pool, total_rosters)
+                    if fg is not None and total_rosters else None
+                )
                 rows.append(
                     {
                         "player_id": p.player_id,
@@ -415,11 +554,22 @@ def _free_agent_board(
                         "projected_points": p.projected_points,
                         "vor": vor,
                         "market_price": pos_market.price_for_win_probability(0.65, budget_total),
-                        "recommend": rec,
+                        "recommend": ceiling(vor),
+                        "expert_rank": expert_rank(p),
+                        "fg_projected_points": fg.projected_points if fg else None,
+                        "fg_vor": fg_vor,
+                        "fg_recommend": ceiling(fg_vor),
                     }
                 )
             by_position[pos] = rows
-        return {"week": week, "by_position": by_position}
+        return {
+            "week": week,
+            "by_position": by_position,
+            "expert": {"fetched_at": expert["fetched_at"]} if expert else None,
+            "fg_projections": (
+                {"fetched_at": fg_projections["fetched_at"]} if fg_projections else None
+            ),
+        }
     except Exception as exc:  # noqa: BLE001 - advisory, never fatal
         log.warning("free-agent board unavailable: %s", exc)
         return {"error": f"{type(exc).__name__}: {exc}"}
