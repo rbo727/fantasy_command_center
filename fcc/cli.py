@@ -647,10 +647,12 @@ def faab_targets(
         full_market = BidMarket(claims=claims)
 
         t = Table(title="Worth bidding on")
-        for col in ("Player", "Pos", "Proj", "Over next free"):
-            t.add_column(col, justify="right" if col in ("Proj", "Over next free") else "left")
+        # Headers kept short so the table survives an 80-column terminal;
+        # Rich silently truncates the rightmost column otherwise.
+        for col in ("Player", "Pos", "Proj", "vs free"):
+            t.add_column(col, justify="right" if col in ("Proj", "vs free") else "left")
         t.add_column("Fills")
-        t.add_column("Typical winning bid", justify="right")
+        t.add_column("Typical bid", justify="right")
         for target in targets:
             market = full_market.comparable(target.player.pos)
             typical = market.price_for_win_probability(0.65, budget_total)

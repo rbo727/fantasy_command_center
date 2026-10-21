@@ -139,7 +139,7 @@ def test_it_distinguishes_a_one_week_rental_from_a_lasting_hole(stubbed):
 
 def test_it_shows_what_a_bid_typically_costs(stubbed):
     r = run("faab", "targets", "sleeper_main")
-    assert "Typical winning bid" in r.output
+    assert "Typical bid" in r.output
     assert "$" in r.output
 
 
