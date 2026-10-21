@@ -291,6 +291,99 @@ def faab(key: str, position: str | None = None) -> dict:
     return payload
 
 
+@app.get("/api/leagues/{key}/targets")
+def targets(key: str, position: str | None = None, limit: int = 12) -> dict:
+    """Your lineup's holes this week, and who on the wire fills them.
+
+    Distinct from /waiver-report, which is FantasyGuru's board filtered to
+    availability. This one starts from *your* roster: which starting slots have
+    nobody usable in them, how long each hole lasts, and which free agents beat
+    the next free alternative at that position.
+    """
+    from fcc.engines.market import BidMarket, parse_claims
+    from fcc.engines.targets import find_targets, rental_warning
+
+    settings = get_settings()
+    try:
+        league = settings.league(key)
+    except KeyError as exc:
+        raise HTTPException(404, f"No league configured with key {key!r}") from exc
+    if league.platform != "sleeper":
+        raise HTTPException(400, f"{key} is a {league.platform} league; this is Sleeper-only.")
+
+    try:
+        client = connector_for(league)
+        week = client.current_week() or 1
+        roster = client.roster(week=week)
+        universe = client.ranked_players(week=week)
+        rostered = client.rostered_player_ids()
+        summary = client.league_summary()
+        budget_total = (client.league().get("settings") or {}).get("waiver_budget") or 0
+        budgets = client.league_budgets()
+        claims = parse_claims(client.transaction_history(), client.players())
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"{type(exc).__name__}: {exc}") from exc
+
+    remaining = summary.faab_remaining if summary.faab_remaining is not None else budget_total
+    available = [p for p in universe if getattr(p, "player_id", None) not in rostered]
+    teams = len([r for r in budgets if not r.get("likely_chopped")]) or 12
+
+    found, needs = find_targets(
+        available, universe, roster, teams=teams, week=week,
+        positions=[position] if position else None, limit=limit,
+    )
+    full_market = BidMarket(claims=claims)
+
+    rows = []
+    for t in found:
+        market = full_market.comparable(t.player.pos)
+        typical = market.price_for_win_probability(0.65, budget_total)
+        rows.append(
+            {
+                "name": t.player.name,
+                "position": t.player.pos,
+                "team": getattr(t.player, "team", None),
+                "projected": t.player.projected_points,
+                "value_over_free": t.vor,
+                "beats_current": t.beats_current,
+                "fills": None
+                if t.fills is None
+                else {
+                    "slot": t.fills.slot,
+                    "cause": t.fills.cause,
+                    "incumbent": t.fills.incumbent,
+                    "weeks": t.fills.weeks,
+                    "is_rental": t.fills.is_rental,
+                },
+                "typical_bid": typical,
+                "rental_warning": (
+                    rental_warning(t, typical, remaining) if typical is not None else None
+                ),
+                "reasons": t.reasons,
+            }
+        )
+
+    return {
+        "league_key": key,
+        "week": week,
+        "teams_alive": teams,
+        "budget": {"total": budget_total, "remaining": remaining},
+        "available_count": len(available),
+        "needs": [
+            {
+                "slot": n.slot,
+                "position": n.position,
+                "cause": n.cause,
+                "incumbent": n.incumbent,
+                "weeks": n.weeks,
+                "is_rental": n.is_rental,
+            }
+            for n in needs
+        ],
+        "targets": rows,
+    }
+
+
 @app.get("/api/leagues/{key}/waiver-claims")
 def waiver_claims(key: str) -> dict:
     """My waiver claims: what's queued for the next clear, and how the last one went.

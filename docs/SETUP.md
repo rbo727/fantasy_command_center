@@ -194,6 +194,10 @@ Three tabs:
   contested, and a price ladder ("$31 would have won 80% of comparable claims").
   Filterable by position. For a league with `format: guillotine`, it also shows
   every surviving team's remaining FAAB and the price that wins outright.
+  The tab opens with **your own lineup's holes** — which starting slots have
+  nobody usable in them, and whether each is a one-week bye or a multi-week
+  injury — then ranks available players against those holes. A bye is a rental;
+  paying a multi-week price for one start is flagged.
 - **Action log** — every mutation the app has proposed or made.
 
 A league that can't be read shows its error on its own card; the rest of the

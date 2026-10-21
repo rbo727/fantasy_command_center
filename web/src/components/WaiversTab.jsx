@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api'
 import { StatusBadge } from './StatusBadge'
+import { NeedsPanel } from './NeedsPanel'
 
 const POSITIONS = ['All', 'QB', 'RB', 'WR', 'TE', 'K', 'DEF']
 
@@ -569,6 +570,9 @@ export function WaiversTab({ leagues }) {
         </div>
       )}
 
+      {/* Your own roster's holes come first: every other section here is a
+          board of players, and which of them matter depends on what you need. */}
+      <NeedsPanel leagueKey={key} position={position} />
       <PendingClaims leagueKey={key} />
       <WaiverReport leagueKey={key} />
 

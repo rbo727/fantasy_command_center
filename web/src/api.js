@@ -21,6 +21,11 @@ export const api = {
   overview: () => request('/api/overview'),
   leagues: () => request('/api/leagues'),
   roster: (key) => request(`/api/leagues/${encodeURIComponent(key)}/roster`),
+  targets: (key, position) =>
+    request(
+      `/api/leagues/${encodeURIComponent(key)}/targets` +
+        (position ? `?position=${encodeURIComponent(position)}` : '')
+    ),
   faab: (key, position) =>
     request(
       `/api/leagues/${encodeURIComponent(key)}/faab` +
