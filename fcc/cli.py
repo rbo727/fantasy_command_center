@@ -583,6 +583,113 @@ def _render_guillotine(client, week: int | None) -> None:
     console.print()
 
 
+@faab_app.command("targets")
+def faab_targets(
+    league: str = typer.Argument(..., help="League key from config/leagues.yml"),
+    position: str = typer.Option(None, help="Only this position, e.g. RB"),
+    limit: int = typer.Option(10, help="How many targets to show"),
+    week: int = typer.Option(None),
+) -> None:
+    """Who on the wire is worth adding, given this roster's holes right now."""
+    from fcc.engines.market import BidMarket, parse_claims
+    from fcc.engines.targets import find_targets, rental_warning
+
+    client, lg = _sleeper_for(league)
+    with client:
+        wk = week or client.current_week() or 1
+        roster = client.roster(week=wk)
+        universe = client.ranked_players(week=wk)
+        rostered = client.rostered_player_ids()
+        available = [p for p in universe if getattr(p, "player_id", None) not in rostered]
+
+        summary = client.league_summary()
+        budget_total = (client.league().get("settings") or {}).get("waiver_budget") or 0
+        remaining = (
+            summary.faab_remaining if summary.faab_remaining is not None else budget_total
+        )
+
+        teams = len([r for r in client.league_budgets() if not r.get("likely_chopped")]) or 12
+
+        targets, needs = find_targets(
+            available, universe, roster, teams=teams, week=wk,
+            positions=[position] if position else None, limit=limit,
+        )
+
+        console.print(
+            f"\n[bold]{lg.name or league}[/bold] - week {wk}, "
+            f"${remaining} FAAB left, {teams} teams alive, "
+            f"{len(available)} players available\n"
+        )
+
+        if needs:
+            t = Table(title="Holes in your lineup right now")
+            for col in ("Slot", "Who", "Why", "Lasts"):
+                t.add_column(col)
+            for n in needs:
+                t.add_row(
+                    n.slot,
+                    n.incumbent or "(empty)",
+                    n.cause,
+                    "this week" if n.is_rental else f"~{n.weeks} weeks",
+                )
+            console.print(t)
+        else:
+            console.print("[green]No holes in the starting lineup this week.[/green]")
+
+        if not targets:
+            console.print(
+                "\n[yellow]Nothing on the wire projects above replacement at the "
+                "positions you need.[/yellow]"
+            )
+            return
+
+        claims = parse_claims(client.transaction_history(), client.players())
+        full_market = BidMarket(claims=claims)
+
+        t = Table(title="Worth bidding on")
+        for col in ("Player", "Pos", "Proj", "Over next free"):
+            t.add_column(col, justify="right" if col in ("Proj", "Over next free") else "left")
+        t.add_column("Fills")
+        t.add_column("Typical winning bid", justify="right")
+        for target in targets:
+            market = full_market.comparable(target.player.pos)
+            typical = market.price_for_win_probability(0.65, budget_total)
+            if target.fills is None:
+                fills = "-"
+            else:
+                horizon = "1wk" if target.fills.is_rental else f"{target.fills.weeks}wk"
+                fills = f"{target.fills.slot} ({horizon})"
+            t.add_row(
+                target.player.name,
+                target.player.pos,
+                f"{target.player.projected_points:.1f}",
+                f"{target.vor:+.1f}",
+                fills,
+                f"${typical}" if typical is not None else "-",
+            )
+        console.print(t)
+
+        console.print("\n[bold]Why these[/bold]")
+        for target in targets[:5]:
+            console.print(f"  [bold]{target.player.name}[/bold] ({target.player.pos})")
+            for reason in target.reasons:
+                console.print(f"    - {reason}")
+            market = full_market.comparable(target.player.pos)
+            typical = market.price_for_win_probability(0.65, budget_total)
+            if typical is not None:
+                warning = rental_warning(target, typical, remaining)
+                if warning:
+                    console.print(f"    [yellow]{warning}[/yellow]")
+
+        console.print(
+            "\n[dim]Price a specific one with: "
+            f"fcc faab bid {league} --player \"<name>\"[/dim]"
+        )
+        console.print(
+            "[yellow]FAAB is money tier: nothing here is submitted.[/yellow]"
+        )
+
+
 @faab_app.command("market")
 def faab_market(
     league: str = typer.Argument(..., help="League key from config/leagues.yml"),

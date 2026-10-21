@@ -207,3 +207,46 @@ def find(players: list[RankedPlayer], name: str) -> RankedPlayer | None:
         return None
     partial = [p for p in players if needle in p.name.lower()]
     return partial[0] if len(partial) == 1 else None
+
+
+def replacement_from_available(
+    available: list[RankedPlayer], position: str, excluding: RankedPlayer | None = None
+) -> float | None:
+    """Points of the best player you could actually get for free right now.
+
+    Preferred over :func:`replacement_points` whenever the free-agent pool is
+    known. That function *estimates* replacement level by assuming the top
+    ``teams x starters`` players are rostered; this one simply looks. When the
+    rostered set is in hand, looking beats assuming — and the two disagree most
+    exactly when it matters, in a shrinking guillotine field where the
+    rank-based estimate drifts badly.
+
+    ``excluding`` is the player being valued, so he is not compared to himself.
+    """
+    pool = [
+        p.projected_points
+        for p in available
+        if p.pos == position.upper()
+        and p.projected_points is not None
+        and (excluding is None or p is not excluding)
+    ]
+    return max(pool) if pool else None
+
+
+def value_over_available(
+    player: RankedPlayer, available: list[RankedPlayer]
+) -> float | None:
+    """How much better this player is than the next one you could have free.
+
+    This is the number that should drive a bid: if two comparable players are
+    both unowned, neither is worth much money, because you will end up with one
+    of them regardless.
+    """
+    if player.projected_points is None:
+        return None
+    baseline = replacement_from_available(available, player.pos, excluding=player)
+    if baseline is None:
+        # Nothing else available at the position - the whole projection is the
+        # gain, since the alternative is starting nobody.
+        return player.projected_points
+    return player.projected_points - baseline
