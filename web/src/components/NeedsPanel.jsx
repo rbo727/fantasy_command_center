@@ -14,6 +14,62 @@ function causeTone(need) {
   return 'critical'
 }
 
+const DEPTH_TONE = { critical: 'critical', thin: 'warning', ok: 'good' }
+
+/* Depth is the slower-burning problem: a position can be technically fillable
+   this week and still be one hamstring from disaster. That's a reason to buy
+   before you have to, which is why it sits beside the acute holes. */
+function DepthTable({ depth }) {
+  if (!depth?.length) return null
+  const worrying = depth.filter((d) => d.risk !== 'ok')
+  return (
+    <div className="card">
+      <div className="platform">Depth</div>
+      <h3>How thin you are by position</h3>
+      <div className="table-wrap" style={{ marginTop: 10 }}>
+        <table>
+          <thead>
+            <tr>
+              <th>Pos</th>
+              <th style={{ textAlign: 'right' }}>Usable</th>
+              <th style={{ textAlign: 'right' }}>Slots</th>
+              <th>Risk</th>
+              <th>Unavailable</th>
+            </tr>
+          </thead>
+          <tbody>
+            {depth.map((d) => (
+              <tr key={d.position} className={d.risk === 'critical' ? 'problem' : ''}>
+                <td>{d.position}</td>
+                <td className="num">{d.usable_now}</td>
+                <td className="num">
+                  {d.dedicated}
+                  {d.flex_share >= 0.05 && (
+                    <span style={{ color: 'var(--text-muted)' }}>
+                      {' '}+{Math.round(d.flex_share * 100)}% flex
+                    </span>
+                  )}
+                </td>
+                <td>
+                  <StatusBadge tone={DEPTH_TONE[d.risk] || 'neutral'} label={d.risk} />
+                </td>
+                <td style={{ color: 'var(--text-muted)' }}>
+                  {d.unavailable.length ? d.unavailable.join(', ') : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {worrying.length > 0 && (
+        <p style={{ color: 'var(--text-secondary)', marginBottom: 0 }}>
+          {worrying.map((d) => d.describe).join(' · ')}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function Needs({ needs }) {
   if (!needs.length) {
     return (
@@ -77,6 +133,7 @@ export function NeedsPanel({ leagueKey, position }) {
   return (
     <div className="stack">
       <Needs needs={data.needs} />
+      <DepthTable depth={data.depth} />
 
       <div className="card">
         <div className="platform">

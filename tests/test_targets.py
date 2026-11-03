@@ -9,8 +9,10 @@ out, so that case is flagged rather than merely priced.
 from fcc.engines.targets import (
     Need,
     Target,
+    depth_needs,
     find_targets,
     my_best_at,
+    positional_depth,
     rental_warning,
     roster_needs,
 )
@@ -235,3 +237,119 @@ def test_a_multi_week_need_is_never_called_a_rental():
     target = Target(player=rp("Starter", "RB", 15), vor=6.0,
                     fills=Need("RB", "RB", "ir", weeks=6))
     assert rental_warning(target, bid=300, budget_remaining=600) is None
+
+
+# --- positional depth ------------------------------------------------------
+def lineup(*slots, week=10, bench=()):
+    return Roster(
+        league_key="k", team_id="1", week=week,
+        slots=[*slots, *[RosterSlot("BN", p, starter=False) for p in bench]],
+    )
+
+
+def test_depth_counts_usable_bodies_against_dedicated_slots():
+    roster = lineup(
+        starter("WR", pl("WR1", "WR")),
+        starter("WR", pl("WR2", "WR")),
+        bench=[pl("WR3", "WR")],
+    )
+    wr = next(d for d in positional_depth(roster) if d.position == "WR")
+    assert wr.dedicated == 2
+    assert wr.usable_now == 3
+
+
+def test_a_position_that_cannot_fill_its_own_slots_is_critical():
+    roster = lineup(
+        starter("WR", pl("WR1", "WR")),
+        starter("WR", pl("WR2", "WR", status=PlayerStatus.OUT)),
+    )
+    wr = next(d for d in positional_depth(roster) if d.position == "WR")
+    assert wr.usable_now == 1 < wr.dedicated
+    assert wr.risk == "critical"
+    assert "cannot fill" in wr.describe()
+
+
+def test_exactly_enough_with_no_spare_is_thin_not_critical():
+    """One TE for one TE slot is thin, however the flex might land."""
+    roster = lineup(starter("TE", pl("TE1", "TE")), starter("FLEX", pl("RB1", "RB")))
+    te = next(d for d in positional_depth(roster) if d.position == "TE")
+    assert te.risk == "thin"
+    assert te.usable_now == te.dedicated == 1
+
+
+def test_a_fractional_flex_share_never_causes_critical_on_its_own():
+    """The bug this guards: 1 TE vs 1.1 'required' read as unable to field a lineup."""
+    roster = lineup(starter("TE", pl("TE1", "TE")), starter("FLEX", pl("WR1", "WR")))
+    te = next(d for d in positional_depth(roster) if d.position == "TE")
+    assert te.flex_share > 0
+    assert te.required > te.dedicated
+    assert te.risk != "critical"
+
+
+def test_a_real_spare_reads_as_ok():
+    roster = lineup(
+        starter("WR", pl("WR1", "WR")),
+        starter("WR", pl("WR2", "WR")),
+        bench=[pl("WR3", "WR"), pl("WR4", "WR"), pl("WR5", "WR")],
+    )
+    wr = next(d for d in positional_depth(roster) if d.position == "WR")
+    assert wr.risk == "ok"
+
+
+def test_flex_demand_is_weighted_not_split_evenly():
+    """An even split would imply a third of flexes are TEs."""
+    roster = lineup(
+        starter("RB", pl("RB1", "RB")),
+        starter("TE", pl("TE1", "TE")),
+        starter("FLEX", pl("WR1", "WR")),
+    )
+    depths = {d.position: d for d in positional_depth(roster)}
+    assert depths["TE"].flex_share < depths["RB"].flex_share
+
+
+def test_byes_and_injuries_both_remove_a_body():
+    roster = lineup(
+        starter("WR", pl("WR1", "WR")),
+        starter("WR", pl("WR2", "WR", status=PlayerStatus.OUT)),
+        bench=[pl("WR3", "WR", bye=10)],
+        week=10,
+    )
+    wr = next(d for d in positional_depth(roster) if d.position == "WR")
+    assert wr.owned == 3
+    assert wr.usable_now == 1
+    assert len(wr.unavailable) == 2
+
+
+def test_ir_players_do_not_count_as_depth():
+    roster = Roster(
+        league_key="k", team_id="1", week=10,
+        slots=[
+            starter("WR", pl("WR1", "WR")),
+            starter("WR", pl("WR2", "WR")),
+            RosterSlot("IR", pl("WR3", "WR", status=PlayerStatus.INJURED_RESERVE), starter=False),
+        ],
+    )
+    wr = next(d for d in positional_depth(roster) if d.position == "WR")
+    assert wr.owned == 2
+
+
+def test_thin_positions_become_needs_that_rank_targets():
+    roster = lineup(starter("WR", pl("WR1", "WR")), starter("WR", pl("WR2", "WR")))
+    needs = depth_needs(roster)
+    assert "WR" in [n.position for n in needs]
+
+
+def test_a_depth_need_never_outranks_a_real_injury():
+    """Thin is a reason to buy early; an injured starter is a reason to buy now."""
+    thin = Target(player=rp("A", "WR", 12), vor=5.0,
+                  fills=Need("WR", "WR", "thin", weeks=1))
+    hurt = Target(player=rp("B", "WR", 12), vor=5.0,
+                  fills=Need("WR", "WR", "ir", weeks=6))
+    assert hurt.score > thin.score
+
+
+def test_find_targets_reports_only_acute_holes_as_holes():
+    """Depth shapes the ranking but isn't announced as a broken lineup slot."""
+    roster = lineup(starter("WR", pl("WR1", "WR")), starter("WR", pl("WR2", "WR")))
+    _, acute = find_targets([rp("Free WR", "WR", 14.0)], UNIVERSE, roster, teams=12)
+    assert acute == []

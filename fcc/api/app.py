@@ -301,7 +301,7 @@ def targets(key: str, position: str | None = None, limit: int = 12) -> dict:
     the next free alternative at that position.
     """
     from fcc.engines.market import BidMarket, parse_claims
-    from fcc.engines.targets import find_targets, rental_warning
+    from fcc.engines.targets import find_targets, positional_depth, rental_warning
 
     settings = get_settings()
     try:
@@ -369,6 +369,20 @@ def targets(key: str, position: str | None = None, limit: int = 12) -> dict:
         "teams_alive": teams,
         "budget": {"total": budget_total, "remaining": remaining},
         "available_count": len(available),
+        "depth": [
+            {
+                "position": d.position,
+                "dedicated": d.dedicated,
+                "flex_share": d.flex_share,
+                "required": d.required,
+                "usable_now": d.usable_now,
+                "owned": d.owned,
+                "risk": d.risk,
+                "unavailable": d.unavailable,
+                "describe": d.describe(),
+            }
+            for d in positional_depth(roster, week)
+        ],
         "needs": [
             {
                 "slot": n.slot,

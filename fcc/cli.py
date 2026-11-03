@@ -592,7 +592,7 @@ def faab_targets(
 ) -> None:
     """Who on the wire is worth adding, given this roster's holes right now."""
     from fcc.engines.market import BidMarket, parse_claims
-    from fcc.engines.targets import find_targets, rental_warning
+    from fcc.engines.targets import find_targets, positional_depth, rental_warning
 
     client, lg = _sleeper_for(league)
     with client:
@@ -635,6 +635,22 @@ def faab_targets(
             console.print(t)
         else:
             console.print("[green]No holes in the starting lineup this week.[/green]")
+
+        depth = [d for d in positional_depth(roster, wk) if d.risk != "ok"]
+        if depth:
+            d_table = Table(title="Where you are thin")
+            for col in ("Pos", "Usable", "Slots", "Risk"):
+                d_table.add_column(col, justify="right" if col in ("Usable", "Slots") else "left")
+            d_table.add_column("Unavailable")
+            for d in depth:
+                slots = str(d.dedicated)
+                if d.flex_share >= 0.05:
+                    slots += f" +{d.flex_share:.0%} flex"
+                d_table.add_row(
+                    d.position, str(d.usable_now), slots, d.risk,
+                    ", ".join(d.unavailable) or "-",
+                )
+            console.print(d_table)
 
         if not targets:
             console.print(

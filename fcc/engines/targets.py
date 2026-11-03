@@ -154,7 +154,10 @@ def find_targets(
     free-agent-only pool would quietly understate every gap.
     """
     week = week if week is not None else roster.week
-    needs = roster_needs(roster, week)
+    acute = roster_needs(roster, week)
+    # A thin position is a reason to buy before you have to, so depth counts as
+    # a need - but with a short horizon, so it never outranks a real injury.
+    needs = acute + depth_needs(roster, week)
     needs_by_position: dict[str, Need] = {}
     for need in needs:
         # Keep the longest-lasting need per position: a season-ending injury
@@ -210,7 +213,7 @@ def find_targets(
         )
 
     targets.sort(key=lambda t: (-t.score, t.player.name))
-    return targets[:limit], needs
+    return targets[:limit], acute
 
 
 def rental_warning(target: Target, bid: int, budget_remaining: int) -> str | None:
@@ -231,3 +234,154 @@ def rental_warning(target: Target, bid: int, budget_remaining: int) -> str | Non
             "fills the slot."
         )
     return None
+
+
+#: How a flex slot is actually filled, by position. Deliberately not an even
+#: split: an even split across RB/WR/TE implies a third of flexes are TEs,
+#: which makes an ordinary one-TE roster look unable to field a lineup. These
+#: are an assumption about typical usage, tunable per league.
+FLEX_USAGE = {"RB": 0.45, "WR": 0.45, "TE": 0.10, "QB": 0.60}
+
+
+@dataclass
+class Depth:
+    """How many usable bodies a position has, against how many it must cover."""
+
+    position: str
+    #: Slots that can only be filled by this position.
+    dedicated: int
+    #: Expected extra demand from flex slots. Fractional on purpose.
+    flex_share: float
+    usable_now: int
+    owned: int
+    unavailable: list[str] = field(default_factory=list)
+
+    @property
+    def required(self) -> float:
+        return round(self.dedicated + self.flex_share, 2)
+
+    @property
+    def surplus(self) -> float:
+        return self.usable_now - self.required
+
+    @property
+    def risk(self) -> str:
+        """critical = cannot field the lineup; thin = no cover for one more loss.
+
+        Critical is measured against *dedicated* slots only. Fractional flex
+        demand must not tip a position into critical on its own - one TE for
+        one TE slot is thin, not broken, however the flex might land.
+        """
+        if self.usable_now < self.dedicated:
+            return "critical"
+        if self.usable_now < self.required + 1:
+            return "thin"
+        return "ok"
+
+    @property
+    def one_loss_from_trouble(self) -> bool:
+        return self.risk in ("critical", "thin")
+
+    def describe(self) -> str:
+        slots = f"{self.dedicated} {self.position} slot{'' if self.dedicated == 1 else 's'}"
+        if self.flex_share >= 0.05:
+            slots += f" (+{self.flex_share:.0%} of a flex)"
+        if self.risk == "critical":
+            return f"{self.usable_now} usable for {slots} - you cannot fill the lineup"
+        if self.risk == "thin":
+            return f"{self.usable_now} usable for {slots} - no cover if one more goes down"
+        return f"{self.usable_now} usable for {slots}"
+
+
+def positional_depth(roster: Roster, week: int | None = None) -> list[Depth]:
+    """Depth at every position this roster starts.
+
+    Distinct from :func:`roster_needs`, which only sees slots that are broken
+    *right now*. A position can be technically fillable this week and still be
+    one hamstring from disaster, and that is a reason to buy before you have to.
+
+    Starting requirement comes from the league's own slots. Flex demand is
+    weighted by how a flex is actually used rather than split evenly: an even
+    split implies you would start a TE in the flex a third of the time, which
+    flags an ordinary one-TE roster as unable to field a lineup. The weights in
+    :data:`FLEX_USAGE` are an assumption, not a measurement — they are a module
+    constant so a league that plays differently can tune them.
+    """
+    from fcc.engines.lineup import SLOT_ELIGIBILITY
+
+    week = week if week is not None else roster.week
+
+    dedicated: dict[str, int] = {}
+    flex: dict[str, float] = {}
+    for slot in roster.slots:
+        if not slot.starter or slot.slot.upper() in NON_STARTING:
+            continue
+        allowed = SLOT_ELIGIBILITY.get(slot.slot.upper())
+        if not allowed:
+            continue
+        if len(allowed) == 1:
+            position = next(iter(allowed))
+            dedicated[position] = dedicated.get(position, 0) + 1
+            continue
+        weights = {p: FLEX_USAGE.get(p, 0.0) for p in allowed}
+        total = sum(weights.values())
+        for position in allowed:
+            share = weights[position] / total if total else 1 / len(allowed)
+            flex[position] = flex.get(position, 0.0) + share
+
+    owned: dict[str, list] = {}
+    for slot in roster.slots:
+        if slot.player is None or slot.slot.upper() == "IR":
+            continue
+        owned.setdefault((slot.player.position or "").upper(), []).append(slot.player)
+
+    out: list[Depth] = []
+    positions = set(dedicated) | set(flex)
+    for position in sorted(
+        positions, key=lambda p: -(dedicated.get(p, 0) + flex.get(p, 0.0))
+    ):
+        players = owned.get(position, [])
+        usable, sidelined = [], []
+        for player in players:
+            if player.status.is_unavailable or (
+                player.bye_week and week and player.bye_week == week
+            ):
+                sidelined.append(
+                    f"{player.name} "
+                    f"({'bye' if player.bye_week == week else player.status.value})"
+                )
+            else:
+                usable.append(player)
+        out.append(
+            Depth(
+                position=position,
+                dedicated=dedicated.get(position, 0),
+                flex_share=round(flex.get(position, 0.0), 2),
+                usable_now=len(usable),
+                owned=len(players),
+                unavailable=sidelined,
+            )
+        )
+    return out
+
+
+def depth_needs(roster: Roster, week: int | None = None) -> list[Need]:
+    """Thin positions expressed as needs, so targets can be ranked against them.
+
+    A depth hole is not acute — the lineup may still be legal — so it is given
+    a short horizon and never outranks a genuine multi-week injury.
+    """
+    needs: list[Need] = []
+    for depth in positional_depth(roster, week):
+        if not depth.one_loss_from_trouble:
+            continue
+        needs.append(
+            Need(
+                slot=depth.position,
+                position=depth.position,
+                cause="thin" if depth.risk == "thin" else "short",
+                incumbent="",
+                weeks=2 if depth.risk == "critical" else 1,
+            )
+        )
+    return needs

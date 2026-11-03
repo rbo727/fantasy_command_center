@@ -87,3 +87,20 @@ def test_non_sleeper_league_is_400(client, monkeypatch):
 
 def test_a_real_league_still_resolves(client):
     assert client.get("/api/leagues/sleeper_main/targets").status_code == 200
+
+
+def test_depth_is_reported_alongside_the_acute_holes(client):
+    body = client.get("/api/leagues/sleeper_main/targets").json()
+    assert body["depth"], "depth should always be reported"
+    by_pos = {d["position"]: d for d in body["depth"]}
+    assert "RB" in by_pos
+    rb = by_pos["RB"]
+    assert {"dedicated", "flex_share", "usable_now", "risk", "describe"} <= set(rb)
+    assert rb["risk"] in ("ok", "thin", "critical")
+
+
+def test_depth_separates_dedicated_slots_from_flex_share(client):
+    """A fractional flex share must never be the sole cause of 'critical'."""
+    for d in client.get("/api/leagues/sleeper_main/targets").json()["depth"]:
+        if d["risk"] == "critical":
+            assert d["usable_now"] < d["dedicated"]
